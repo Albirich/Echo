@@ -1,0 +1,22 @@
+{
+  "utility_weights": {
+    "w1": 0.30,
+    "w2": 0.20,
+    "w3": 0.15,
+    "w4": 0.10,
+    "w5": 0.10,
+    "w6": 0.05,
+    "w7": 0.05,
+    "w8": 0.05,
+    "wP": 0.20
+  },
+  "speak_threshold": 0.35,
+  "budgets": {
+    "unsolicited_per_90s": 1,
+    "burst": 2,
+    "quiet_after_burst_s": 180,
+    "tool_per_60s": 3,
+    "tool_cooldown_s": 10,
+    "memwrites_per_min": 4
+  }
+}

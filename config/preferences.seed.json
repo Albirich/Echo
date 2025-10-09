@@ -1,0 +1,18 @@
+{
+  "tasteDNA": {
+    "seed": 18041997,
+    "temp": 0.10,
+    "plasticity": 0.04,
+    "latent_vec_dim": 24
+  },
+<<<<<<< HEAD
+  "items": {
+    "color:red": {"tags": ["red","warm"], "base_score": 0.10, "stats": {"exposures": 5}},
+    "concept:blood": {"tags": ["blood"], "base_score": -0.80, "stats": {"exposures": 3}}
+  },
+  "assoc": { "color:red": { "concept:blood": -0.30 } }
+=======
+  "items": { },
+  "assoc": { }
+>>>>>>> 42c514f (Initial commit: Echo core (without ui/, models/, logs/))
+}

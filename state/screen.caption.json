@@ -1,0 +1,19 @@
+﻿{
+    "summary":  "Unable to generate caption",
+    "salient":  [
+
+                ],
+    "burst":  {
+                  "first_frame":  "frame_20251008-052039-321.png",
+                  "frame_count":  6,
+                  "duration_sec":  2,
+                  "fps":  3,
+                  "last_frame":  "frame_20251008-052041-333.png"
+              },
+    "active_window":  {
+                          "title":  "Executor.ps1 - Echo - Visual Studio Code",
+                          "exe":  "C:\\Users\\meuch\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+                          "process":  "Code"
+                      },
+    "ts":  "2025-10-08T05:20:51.0082373-04:00"
+}

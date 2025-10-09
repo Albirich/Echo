@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self'; img-src 'self' file: data:;">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Echo Room</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="root">
+        <div id="background"></div>
+
+        <div id="stand"><img id="stand-img" alt=""></div>
+
+        <div id="overlay">
+            <div id="toolbar">
+                <label>
+                    Stand:
+                    <select id="stand-select"></select>
+                </label>
+                <button id="stand-import">Import...</button>
+                <label><input type="checkbox" id="stand-visible" checked> Visible</label>
+                <label>Scale <input type="range" id="stand-scale" min="40" max="200" value="100"></label>
+                <button id="stand-mirror">Mirror</button>
+                <span class="sep"></span>
+                <button id="add-note">+ Note</button>
+                <button id="save-layout">Save Layout</button>
+                <span id="status"></span>
+            </div>
+            <div id="widgets"></div>
+            <div id="clock"></div>
+        </div>
+    </div>
+
+    <div id="chat-panel">
+        <div id="chat-log"></div>
+        <form id="chat-form" autocomplete="off">
+            <input id="chat-input" placeholder="Type a message...">
+            <button type="submit">Send</button>
+        </form>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

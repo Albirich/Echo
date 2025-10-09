@@ -1,0 +1,35 @@
+{
+  "version": "1",
+  "tools": [
+    {
+      "name": "memory.save",
+      "desc": "Save or update a durable fact.",
+      "params": { "k": "string", "v": "string" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 12 }
+    },
+    {
+      "name": "memory.forget",
+      "desc": "Forget a durable fact.",
+      "params": { "k": "string" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 12 }
+    },
+    {
+      "name": "room.set_background",
+      "desc": "Set wallpaper image (copied into decor/).",
+      "params": { "src": "string" },
+      "requires_confirm": true,
+      "ext_whitelist": [ ".jpg", ".jpeg", ".png", ".webp" ],
+      "max_mb": 20,
+      "rate_limit": { "per_min": 2 }
+    },
+    {
+      "name": "room.add_note",
+      "desc": "Add a sticky note to the room.",
+      "params": { "text": "string", "x": "int?", "y": "int?", "color": "string?" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 10 }
+    }
+  ]
+}

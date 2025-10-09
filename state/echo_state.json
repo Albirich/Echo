@@ -1,0 +1,19 @@
+﻿{
+    "im_line_cursor":  168,
+    "last_reply_ts":  "2025-09-23T21:15:04.3710130-04:00",
+    "cooldown_s":  2,
+    "min_confidence":  0.55,
+    "allow_unsolicited_from_im":  true,
+    "im_recent":  {
+                      "act||":  "2025-09-23T22:10:49.1410981-04:00",
+                      "msg|I\u0027m here and tracking. Say hi or tell me what to do next.":  "2025-09-23T21:15:04.3700129-04:00"
+                  },
+    "im_groups":  {
+                      "default":  "2025-09-23T22:10:49.1410981-04:00"
+                  },
+    "im_ttl_s":  90,
+    "im_group_cooldowns_s":  {
+                                 "idle":  600,
+                                 "default":  90
+                             }
+}

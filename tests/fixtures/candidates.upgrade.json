@@ -1,0 +1,23 @@
+[
+  {
+    "type": "PublicUtterance",
+    "thread_id": "t-upgrade-clarify",
+    "speak_text": "What’s the upgrade?",
+    "utility": 0.63,
+    "components": {"GoalProgress":0.25,"EVI":0.22,"DriveRelief":0.06,"SocialFit":0.06,"MoodFit":0.07,"Cost":0.01,"PrivacyRisk":0.00,"SpamRisk":0.02}
+  },
+  {
+    "type": "ToolCall",
+    "thread_id": "t-upgrade-clarify",
+    "tool": {"name":"view_screen","args":{"focus":"active_window"}},
+    "utility": 0.58,
+    "components": {"GoalProgress":0.22,"EVI":0.20,"DriveRelief":0.05,"SocialFit":0.03,"MoodFit":0.05,"Cost":0.04,"PrivacyRisk":0.08,"SpamRisk":0.00}
+  },
+  {
+    "type": "MemoryWrite",
+    "thread_id": "t-upgrade-clarify",
+    "memory_line": "Recorded curiosity + asked user.",
+    "utility": 0.40,
+    "components": {"GoalProgress":0.08,"EVI":0.00,"DriveRelief":0.04,"SocialFit":0.02,"MoodFit":0.04,"Cost":0.00,"PrivacyRisk":0.00,"SpamRisk":0.00}
+  }
+]

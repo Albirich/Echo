@@ -1,0 +1,26 @@
+﻿{
+    "ts":  "2025-10-08T09:20:38.764Z",
+    "mood":  {
+                 "valence":  0,
+                 "arousal":  0,
+                 "dominance":  1
+             },
+    "active_window":  {
+                          "title":  "Executor.ps1 - Echo - Visual Studio Code",
+                          "process_id":  12004,
+                          "process":  "Code"
+                      },
+    "idle_sec":  0,
+    "summary":  "User continues playing Megabonk, a puzzle game.",
+    "tags":  [
+                 "playing",
+                 "game",
+                 "puzzle"
+             ],
+    "suggestions":  [
+                        "Try playing a different puzzle game like Sokoban or Tetris to switch things up."
+                    ],
+    "shallow_memory":  [
+
+                       ]
+}

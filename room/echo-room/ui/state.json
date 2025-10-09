@@ -1,0 +1,17 @@
+{
+  "background": "D:/Echo/decor/wallpaper.jpg",
+  "theme": "dark",
+  "alwaysOnTop": false,
+  "clickThrough": false,
+  "width": 1100,
+  "height": 700,
+  "widgets": [
+    {
+      "id": "hello",
+      "x": 40,
+      "y": 40,
+      "text": "Echo Room",
+      "color": "#ff6b6b"
+    }
+  ]
+}

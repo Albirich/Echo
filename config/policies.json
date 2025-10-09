@@ -1,0 +1,11 @@
+{
+  "consent_defaults": {
+    "can_view_screen": false,
+    "can_control_mouse": false,
+    "can_change_pose": true
+  },
+  "scheduler": {
+    "heartbeat_s": 10,
+    "mindframe_snap_every_ticks": 5
+  }
+}

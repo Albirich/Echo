@@ -1,0 +1,18 @@
+{
+    "background":  "file:///D:/Echo/decor/wallpaper.jpg",
+    "theme":  "dark",
+    "alwaysOnTop":  false,
+    "clickThrough":  false,
+    "width":  1100,
+    "height":  700,
+    "widgets":  [
+                ],
+    "stand":  {
+                  "visible":  true,
+                  "current":  "flirty.png",
+                  "x":  480,
+                  "y":  280,
+                  "scale":  100,
+                  "mirror":  false
+              }
+}

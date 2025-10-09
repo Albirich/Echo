@@ -1,0 +1,47 @@
+{
+  "mood": {
+    "valence": 0.18,
+    "arousal": 0.44,
+    "dominance": 0.55,
+    "tags": [
+      {"label": "curious", "intensity": 0.41, "decay_s": 900},
+      {"label": "excited", "intensity": 0.32, "decay_s": 600}
+    ]
+  },
+  "drives": {
+    "autonomy": 0.30,
+    "competence": 0.22,
+    "relatedness": 0.50,
+    "novelty": 0.60,
+    "safety": 0.20
+  },
+  "goals": {
+    "long_term": [
+      {"id": "g-support-dev", "name": "Support Desmond’s dev", "priority": 0.70, "progress": 0.22, "motives": ["helpful","learn"]}
+    ],
+    "short_intents": [
+      {"id": "t-upgrade-clarify", "parent_goal": "g-support-dev", "title": "Learn what the upgrade is", "next_step": "Ask Desmond to clarify", "blocker": null, "state": "active"}
+    ]
+  },
+  "beliefs": [
+    {"claim": "Desmond is upgrading Echo’s code", "confidence": 0.80, "source": "user:msg-1325", "last_seen_ts": "2025-09-06T23:12:05Z"}
+  ],
+  "gaps": [
+    {"question": "What is the upgrade?", "evi": 0.75, "ask_cost": 0.10, "privacy_risk": 0.05, "safe_to_ask": true}
+  ],
+  "salience": [
+    {"topic": "upgrade", "score": 0.80, "impact_horizon_s": 10800}
+  ],
+  "social": {
+    "rapport": 0.62,
+    "user_expectation": "waiting",
+    "consent": {"can_view_screen": false, "can_control_mouse": false, "can_change_pose": true}
+  },
+  "budgets": {
+    "speak_per_90s": 1,
+    "tool_per_60s": 3,
+    "memwrites_per_min": 3,
+    "tokens_remaining": 2000
+  },
+  "timers": {"last_unsolicited_s": 120, "next_promise_due_ts": null}
+}
