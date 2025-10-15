@@ -28,14 +28,31 @@ if (-not (Test-Path $outbox)) {
 }
 
 # ---------------------------
+# llama.cpp orchestration (switch from Ollama)
+# ---------------------------
+if (-not $env:ECHO_HOME -or -not (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME = $HOME_DIR }
+if (-not $env:ECHO_USE_LLAMA_CPP -or -not $env:ECHO_USE_LLAMA_CPP.Trim()) { $env:ECHO_USE_LLAMA_CPP = '1' }
+# New flag to fully disable Ollama startup while keeping code for future reuse
+if (-not $env:ECHO_ENABLE_OLLAMA -or -not $env:ECHO_ENABLE_OLLAMA.Trim()) { $env:ECHO_ENABLE_OLLAMA = '0' }
+if ($env:ECHO_USE_LLAMA_CPP -match '^(1|true|yes)$') {
+  Write-Host "[EchoAll] Using llama.cpp runner (no daemon)."
+  # Force-disable llama.cpp built-in chat templating; we provide ChatML
+  $env:ECHO_LLAMA_NO_CNV = '1'
+  Write-Host "[EchoAll]   -> ECHO_LLAMA_NO_CNV=1 (pass -no-cnv)"
+}
+
+# ---------------------------
 # Ollama host & models (single source of truth)
 # ---------------------------
 if (-not $env:OLLAMA_HOST -or $env:OLLAMA_HOST -eq '') { $env:OLLAMA_HOST = 'http://127.0.0.1:11434' }
 
 # Preferred defaults
-$defaultMain   = 'dolphin-mistral:7b'
-$defaultIM     = 'qwen2.5:3b'
+$defaultMain   = 'goekdenizguelmez/JOSIEFIED-Qwen3:8b'
+$defaultIM     = 'dolphin-phi:2.7b'
 $defaultVision = 'llava:7b'
+
+# Show a one-line plan in chat by default (can override)
+if (-not $env:ECHO_SHOW_PLAN -or -not $env:ECHO_SHOW_PLAN.Trim()) { $env:ECHO_SHOW_PLAN = '1' }
 
 # Normalize inputs
 if ($env:ECHO_CHAT_MODEL   -and $env:ECHO_CHAT_MODEL.Trim())   { $env:ECHO_CHAT_MODEL   = $env:ECHO_CHAT_MODEL.Trim()   }
@@ -146,7 +163,11 @@ function Ensure-OllamaUp {
   }
 }
 
-Ensure-OllamaUp
+if ($env:ECHO_ENABLE_OLLAMA -match '^(1|true|yes)$') {
+  Ensure-OllamaUp
+} else {
+  Write-Host "[EchoAll] Ollama disabled; skipping startup."
+}
 
 # ---------------------------
 # Warm-up models (if reachable)
@@ -172,16 +193,20 @@ function Invoke-ModelWarmup([string]$Model, [string]$Label) {
 
 $doWarm = $true
 if ($env:ECHO_WARMUP -and $env:ECHO_WARMUP -match '^(0|false|no)$') { $doWarm = $false }
-if ($doWarm -and (Test-OllamaReachable 2)) {
-  Invoke-ModelWarmup $env:ECHO_MODEL 'chat'
-  if ($env:ECHO_IM_MODEL -and $env:ECHO_IM_MODEL.Trim()) {
-    Invoke-ModelWarmup $env:ECHO_IM_MODEL 'IM'
+if ($env:ECHO_ENABLE_OLLAMA -match '^(1|true|yes)$') {
+  if ($doWarm -and (Test-OllamaReachable 2)) {
+    Invoke-ModelWarmup $env:ECHO_MODEL 'chat'
+    if ($env:ECHO_IM_MODEL -and $env:ECHO_IM_MODEL.Trim()) {
+      Invoke-ModelWarmup $env:ECHO_IM_MODEL 'IM'
+    }
+    if ($env:VISION_MODEL -and $env:VISION_MODEL.Trim()) {
+      Invoke-ModelWarmup $env:VISION_MODEL 'vision'
+    }
+  } elseif ($doWarm) {
+    Write-Host "[EchoAll] Skipping warmup (Ollama not reachable)."
   }
-  if ($env:VISION_MODEL -and $env:VISION_MODEL.Trim()) {
-    Invoke-ModelWarmup $env:VISION_MODEL 'vision'
-  }
-} elseif ($doWarm) {
-  Write-Host "[EchoAll] Skipping warmup (Ollama not reachable)."
+} else {
+  Write-Host "[EchoAll] Ollama disabled; skipping warmup."
 }
 
 # ---------------------------
@@ -216,8 +241,22 @@ function Start-Child {
 # ---------------------------
 # Launch Chat + IM + Vision
 # ---------------------------
-$chat   = Start-Child -Name 'echo-chat'   -File (Join-Path $HOME_DIR 'Start-Echo.ps1') -WorkingDirectory $HOME_DIR
-$im     = Start-Child -Name 'echo-im'     -File (Join-Path $HOME_DIR 'Start-IM.ps1')   -WorkingDirectory $HOME_DIR
+$chat = $null
+$im   = $null
+if ($env:ECHO_USE_LLAMA_CPP -match '^(1|true|yes)$') {
+  # Launch Start-Echo in llama.cpp mode; agentic loop will route via Start-LocalLLM
+  $chat = Start-Child -Name 'echo-chat' -File (Join-Path $HOME_DIR 'Start-Echo.ps1') -WorkingDirectory $HOME_DIR
+  Write-Host "[EchoAll] Chat launched (llama.cpp mode)."
+  
+  # Also launch IM in llama.cpp mode (IM defaults to llama.cpp now)
+  $im   = Start-Child -Name 'echo-im'   -File (Join-Path $HOME_DIR 'Start-IM.ps1')   -WorkingDirectory $HOME_DIR
+  Write-Host "[EchoAll] IM launched (llama.cpp mode)."
+} elseif ($env:ECHO_ENABLE_OLLAMA -match '^(1|true|yes)$') {
+  $chat = Start-Child -Name 'echo-chat' -File (Join-Path $HOME_DIR 'Start-Echo.ps1') -WorkingDirectory $HOME_DIR
+  $im   = Start-Child -Name 'echo-im'   -File (Join-Path $HOME_DIR 'Start-IM.ps1')   -WorkingDirectory $HOME_DIR
+} else {
+  Write-Host "[EchoAll] Skipping Chat/IM processes (no backend enabled)."
+}
 $env:ECHO_HOST_FLAG = Join-Path $HOME_DIR 'state\vision.enabled'
 $flagFile = $env:ECHO_HOST_FLAG
 if (-not (Test-Path $flagFile)) {

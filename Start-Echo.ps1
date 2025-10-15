@@ -46,7 +46,7 @@ if ($EmitPromptFile) {
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $env:ECHO_HOME -or -not (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME = $ScriptRoot }
 if (-not $env:OLLAMA_HOST   -or $env:OLLAMA_HOST   -eq '') { $env:OLLAMA_HOST   = 'http://127.0.0.1:11434' }
-if (-not $env:ECHO_CHAT_MODEL -or $env:ECHO_CHAT_MODEL -eq '') { $env:ECHO_CHAT_MODEL = 'L3.2-Rogue-Creative-Instruct-Uncensored-Abliterated-7B-D_AU-q5_k_m.gguf' }
+if (-not $env:ECHO_CHAT_MODEL -or $env:ECHO_CHAT_MODEL -eq '') { $env:ECHO_CHAT_MODEL = 'athirdpath-NSFW_DPO_Noromaid-7b-Q6_K.gguf' }
 if (-not $env:ECHO_MODEL -or $env:ECHO_MODEL -eq '') { $env:ECHO_MODEL = $env:ECHO_CHAT_MODEL }
 if (-not $env:ECHO_STAND    -or $env:ECHO_STAND    -eq '') { $env:ECHO_STAND    = (Join-Path $env:ECHO_HOME 'stand') }
 
@@ -156,31 +156,6 @@ function Truncate-Text([string]$s, [int]$max=6000) {
   if (-not $s) { return '' }
   if ($s.Length -le $max) { return $s }
   return .Substring(0,[Math]::Max(0,-1)) + '...'
-}
-
-
-function Sanitize-AssistantText([string]$Text) {
-  if (-not $Text) { return '' }
-  $s = ("" + $Text)
-  # Normalize newlines
-  $s = ($s -replace "\r\n?", "`n").Trim()
-  # Strip full-codefence wrappers
-  if ($s -match "^```") {
-    $s = ($s -replace "^```[a-zA-Z0-9_-]*\s*", '')
-    $s = ($s -replace "\s*```\s*$", '')
-  }
-  # Remove common end markers
-  $patterns = @(
-    '\\s*\[end of text\]\\s*$',
-    '\\s*<\|im_end\|>\\s*$',
-    '\\s*<\|eot_id\|>\\s*$',
-    '\\s*</s>\\s*$',
-    '\\s*<\|endoftext\|>\\s*$'
-  )
-  foreach ($p in $patterns) { $s = [regex]::Replace($s, $p, '', 'IgnoreCase') }
-  # Trim weird replacement chars at end
-  $s = ($s -replace "[\uFFFD]+$", '').TrimEnd()
-  return $s
 }
 
 
@@ -1236,6 +1211,10 @@ Rules:
       Trace 'llama.req' @{ model=(Split-Path $modelPath -Leaf); prompt_file=$pf; prompt_len=$chatml.Length }
       $text = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -FlashAttn | Out-String
       $text = $text.Trim()
+      # Strip trailing generation end markers sometimes echoed by models
+      $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
+      $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
+      $text = ($text -replace '(?i)\s*</s>\s*$', '')
       Trace 'llama.resp' @{ len=$text.Length; empty=([string]::IsNullOrWhiteSpace($text)); model=(Split-Path $modelPath -Leaf) }
       return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) }
     } catch {
@@ -1273,6 +1252,12 @@ Rules:
       $text = [string]$resp.message.content
     }
     $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+    # Sanitize common stop markers
+    if ($text) {
+      $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
+      $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
+      $text = ($text -replace '(?i)\s*</s>\s*$', '')
+    }
     Trace 'ollama.resp' @{ len=$text.Length; ms=$ms; model=$Model }
     return @{ ok=$true; text=$text; model=$Model }
   } catch {
@@ -1601,7 +1586,11 @@ function Execute-ToolCall {
 # Agentic Loop with Planning
 # ---------------------------
 function Run-AgenticLoop {
-  param([string]$InitialMessage)
+  param(
+    [string]$InitialMessage,
+    [switch]$Internal  # if true, do not emit assistant chat messages
+  )
+  $emitAssistant = -not $Internal
   # Proactive: adjust avatar at the start of handling any user message
   Maybe-AdjustAvatarFromVad -HomeDir $env:ECHO_HOME -OutboxPath $OUTBOX
   
@@ -1618,9 +1607,10 @@ function Run-AgenticLoop {
       $handled = $false
       if (Get-Command Handle-ChatToolCall -ErrorAction SilentlyContinue) { $handled = (Handle-ChatToolCall -Text $resp.text) }
       if (-not $handled) {
-        $final = Sanitize-AssistantText $resp.text
-        Append-Outbox @{ kind='assistant'; model=$resp.model; text=$final }
-        Append-ConversationLine 'assistant' $final
+        if ($emitAssistant) {
+          Append-Outbox @{ kind='assistant'; model=$resp.model; text=$resp.text }
+          Append-ConversationLine 'assistant' $resp.text
+        }
       }
     }
     return
@@ -1719,9 +1709,10 @@ function Run-AgenticLoop {
     $resp = Send-OllamaChat -UserText $InitialMessage -ConversationHistory $hist
     if ($resp.ok) {
       if (-not (Handle-ChatToolCall -Text $resp.text)) {
-        $final = Sanitize-AssistantText $resp.text
-        Append-Outbox @{ kind='assistant'; model=$resp.model; text=$final }
-        Append-ConversationLine 'assistant' $final
+        if ($emitAssistant) {
+          Append-Outbox @{ kind='assistant'; model=$resp.model; text=$resp.text }
+          Append-ConversationLine 'assistant' $resp.text
+        }
       }
     }
     return
@@ -1732,9 +1723,10 @@ function Run-AgenticLoop {
     Trace 'agentic.simple' @{ goal=$plan.goal }
     # If plan requests a direct message, bypass model to avoid hallucinations
     if ($plan.PSObject.Properties.Match('force_message').Count -gt 0 -and $plan.force_message -and $plan.completion -and $plan.completion.message) {
-      $final = Sanitize-AssistantText $plan.completion.message
-      Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$final }
-      Append-ConversationLine 'assistant' $final
+      if ($emitAssistant) {
+        Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$plan.completion.message }
+        Append-ConversationLine 'assistant' $plan.completion.message
+      }
       Trace 'agentic.complete' @{ planned=$true; simple=$true; bypass_model=$true }
       return
     }
@@ -1745,14 +1737,16 @@ function Run-AgenticLoop {
       $handled = $false
       if (Get-Command Handle-ChatToolCall -ErrorAction SilentlyContinue) { $handled = (Handle-ChatToolCall -Text $resp.text) }
       if (-not $handled) {
-        $final = Sanitize-AssistantText $resp.text
-        Append-Outbox @{ kind='assistant'; model=$resp.model; text=$final }
-        Append-ConversationLine 'assistant' $final
+        if ($emitAssistant) {
+          Append-Outbox @{ kind='assistant'; model=$resp.model; text=$resp.text }
+          Append-ConversationLine 'assistant' $resp.text
+        }
       }
     } elseif ($plan.completion.message) {
-      $final = Sanitize-AssistantText $plan.completion.message
-      Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$final }
-      Append-ConversationLine 'assistant' $final
+      if ($emitAssistant) {
+        Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$plan.completion.message }
+        Append-ConversationLine 'assistant' $plan.completion.message
+      }
     }
     
     Trace 'agentic.complete' @{ planned=$true; simple=$true }
@@ -1766,14 +1760,16 @@ function Run-AgenticLoop {
       $handled = $false
       if (Get-Command Handle-ChatToolCall -ErrorAction SilentlyContinue) { $handled = (Handle-ChatToolCall -Text $resp.text) }
       if (-not $handled) {
-        $final = Sanitize-AssistantText $resp.text
-        Append-Outbox @{ kind='assistant'; model=$resp.model; text=$final }
-        Append-ConversationLine 'assistant' $final
+        if ($emitAssistant) {
+          Append-Outbox @{ kind='assistant'; model=$resp.model; text=$resp.text }
+          Append-ConversationLine 'assistant' $resp.text
+        }
       }
     } elseif ($plan.completion.message) {
-      $final = Sanitize-AssistantText $plan.completion.message
-      Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$final }
-      Append-ConversationLine 'assistant' $final
+      if ($emitAssistant) {
+        Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$plan.completion.message }
+        Append-ConversationLine 'assistant' $plan.completion.message
+      }
     }
     
     Trace 'agentic.complete' @{ planned=$true; simple=$true }
@@ -1790,9 +1786,10 @@ function Run-AgenticLoop {
       $handled = $false
       if (Get-Command Handle-ChatToolCall -ErrorAction SilentlyContinue) { $handled = (Handle-ChatToolCall -Text $resp.text) }
       if (-not $handled) {
-        $final = Sanitize-AssistantText $resp.text
-        Append-Outbox @{ kind='assistant'; model=$resp.model; text=$final }
-        Append-ConversationLine 'assistant' $final
+        if ($emitAssistant) {
+          Append-Outbox @{ kind='assistant'; model=$resp.model; text=$resp.text }
+          Append-ConversationLine 'assistant' $resp.text
+        }
       }
     }
     return
@@ -1913,9 +1910,10 @@ function Run-AgenticLoop {
       Append-Outbox @{ kind='system'; channel='brain'; event='plan.executed'; success=$execution2.success; trace=$execution2.trace }
       if ($execution2.message) {
         if (-not $wasInternal) {
-          $final2 = Sanitize-AssistantText $execution2.message
-          Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$final2 }
-          Append-ConversationLine 'assistant' $final2
+      if ($emitAssistant) {
+        Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$execution2.message }
+        Append-ConversationLine 'assistant' $execution2.message
+      }
         } else {
           Append-Outbox @{ kind='system'; channel='im'; event='acted'; note='internal plan completed'; message_preview=($execution2.message.Substring(0,[Math]::Min(120,$execution2.message.Length))) }
         }
@@ -1932,16 +1930,17 @@ function Run-AgenticLoop {
   # Phase 3: Send completion message
   if ($execution.message) {
     if (-not $wasInternal) {
-      $final = Sanitize-AssistantText $execution.message
-      Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$final }
-      Append-ConversationLine 'assistant' $final
+      if ($emitAssistant) {
+        Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$execution.message }
+        Append-ConversationLine 'assistant' $execution.message
+      }
     } else {
       Append-Outbox @{ kind='system'; channel='im'; event='acted'; note='internal plan completed'; message_preview=($execution.message.Substring(0,[Math]::Min(120,$execution.message.Length))) }
     }
   }
 
   # End-of-loop: optionally commit important learned memories (0–2 max)
-  try { $finalForMem = if ($execution.message) { (Sanitize-AssistantText $execution.message) } else { '' }; Maybe-CommitImportantMemories -InitialMessage $InitialMessage -AssistantMessage $finalForMem } catch { }
+  try { Maybe-CommitImportantMemories -InitialMessage $InitialMessage -AssistantMessage $execution.message } catch { }
 
   Trace 'agentic.complete' @{ planned=$true; pivot=$false }
 }
@@ -2038,8 +2037,12 @@ while ($true) {
       # Tag IM suggestions so the model knows it's not from the user
       $initialText = if ($msg.isIMSuggestion) { "[IM suggestion] " + $msg.text } else { $msg.text }
 
-      # Run agentic loop with the message text only
-      Run-AgenticLoop -InitialMessage $initialText
+      # Run agentic loop; IM suggestions run in internal mode (no chat output)
+      if ($msg.isIMSuggestion) {
+        Run-AgenticLoop -InitialMessage $initialText -Internal
+      } else {
+        Run-AgenticLoop -InitialMessage $initialText
+      }
     } else {
       Start-Sleep -Milliseconds 200
     }

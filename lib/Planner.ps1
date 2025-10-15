@@ -68,6 +68,60 @@ Request: "Add a note about Master Sword location"
 Return ONLY valid JSON. No markdown, no explanations.
 "@
 
+  # Append a concise tool list so the planner knows what it can use
+  try {
+    if (Get-Command Get-ToolRegistry -ErrorAction SilentlyContinue) {
+      $reg = Get-ToolRegistry
+      if ($reg) {
+        $lines = @()
+        foreach ($k in $reg.Keys) {
+          $tool = $reg[$k]
+          if ($tool -and $tool.name) {
+            $desc = if ($tool.description) { $tool.description } else { '' }
+            $lines += ("- {0}: {1}" -f $tool.name, $desc)
+          }
+        }
+        if ($lines.Count -gt 0) {
+          $toolHints = ($lines -join "`n")
+          $planningPrompt = $planningPrompt + "`n`nAVAILABLE TOOLS:`n" + $toolHints + "`n"
+        }
+      }
+    }
+  } catch { }
+
+  # Append a tiny recent conversation tail to help planning
+  try {
+    $home = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { try { (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } catch { (Get-Location).Path } }
+    $histPath = Join-Path $home 'state\conversation_history.jsonl'
+    if (Test-Path -LiteralPath $histPath) {
+      $tail = Get-Content -LiteralPath $histPath -Encoding UTF8 | Select-Object -Last 8
+      $lines = @()
+      foreach ($ln in $tail) {
+        try {
+          $o = $ln | ConvertFrom-Json
+          if ($o.role -and $o.content) {
+            $role = [string]$o.role
+            $txt  = [string]$o.content
+            if ($txt.Length -gt 160) { $txt = $txt.Substring(0,160) + '…' }
+            if ($role -eq 'user') { $lines += ('U: ' + $txt) }
+            elseif ($role -eq 'assistant') { $lines += ('A: ' + $txt) }
+          }
+        } catch { }
+      }
+      if ($lines.Count -gt 0) {
+        $planningPrompt = $planningPrompt + "`nRECENT CHAT (last few):`n" + ($lines -join "`n") + "`n"
+      }
+    }
+  } catch { }
+
+  # Add compact planning hints for common flows
+  $planningPrompt += @"
+
+PLANNING HINTS:
+- For changing avatar/look, first run info task list_poses to discover valid pose filenames, then use change_avatar with one of those items; do not hardcode a filename.
+- For recalling facts/codes, prefer memory.search (with #tags when known) then memory.read for the specific item.
+"@
+
   try {
     $body = @{
       model = $Model
@@ -77,6 +131,7 @@ Return ONLY valid JSON. No markdown, no explanations.
     } | ConvertTo-Json -Compress
     
     $uri = "$($env:OLLAMA_HOST.TrimEnd('/'))/api/chat"
+    $t0 = Get-Date
     $resp = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 180
     
     $raw = ($resp.message.content | Out-String).Trim()
@@ -105,6 +160,17 @@ Return ONLY valid JSON. No markdown, no explanations.
     $histLine = (@{ ts=(Get-Date).ToString('o'); ok=[bool]$plan; raw_len=$raw.Length } | ConvertTo-Json -Depth 10 -Compress) + "`n"
     Add-Content -LiteralPath (Join-Path $logs 'planner.history.jsonl') -Value $histLine -Encoding UTF8
 
+    # Log timing to outbox if available
+    try {
+      $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+      $home = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { (Get-Location).Path }
+      $outbox = Join-Path $home 'ui\outbox.jsonl'
+      if (Test-Path -LiteralPath $outbox) {
+        $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='planner.model'; data=@{ ok=[bool]$plan; ms=$ms } } | ConvertTo-Json -Depth 5 -Compress
+        Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+      }
+    } catch { }
+
     if ($plan) { return $plan }
     # Fallback minimal plan to avoid full chat fallback path
     return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{ message='Okay.' } }
@@ -121,7 +187,10 @@ function Validate-Plan {
   
   # Check required fields
   if (-not $Plan.goal) { return $false }
-  if (-not $Plan.steps) { return $false }
+  # Steps are preferred but not mandatory when completion depends on info_tasks
+  $hasSteps = ($Plan.steps -and @($Plan.steps).Count -gt 0)
+  $hasInfo  = ($Plan.info_tasks -and @($Plan.info_tasks).Count -gt 0)
+  if (-not $hasSteps -and -not $hasInfo) { return $false }
   
   # Validate dependencies exist
   $availableKeys = @()
@@ -129,17 +198,28 @@ function Validate-Plan {
     $availableKeys += $Plan.info_tasks | ForEach-Object { $_.key }
   }
   
-  foreach ($step in $Plan.steps) {
-    if ($step.depends_on) {
-      foreach ($dep in $step.depends_on) {
-        if ($dep -notin $availableKeys) {
-          Write-Warning "Step depends on missing key: $dep"
-          return $false
+  if ($hasSteps) {
+    foreach ($step in $Plan.steps) {
+      if ($step.depends_on) {
+        foreach ($dep in $step.depends_on) {
+          if ($dep -notin $availableKeys) {
+            Write-Warning "Step depends on missing key: $dep"
+            return $false
+          }
         }
       }
+      if ($step.action) { $availableKeys += $step.action }
     }
-    # Add this step's output to available keys
-    if ($step.action) { $availableKeys += $step.action }
+  }
+
+  # If completion depends_on keys are present, ensure they exist in available keys
+  if ($Plan.completion -and $Plan.completion.depends_on) {
+    foreach ($dep in $Plan.completion.depends_on) {
+      if ($dep -notin $availableKeys) {
+        Write-Warning "Completion depends on missing key: $dep"
+        return $false
+      }
+    }
   }
   
   return $true
