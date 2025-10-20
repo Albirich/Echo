@@ -25,6 +25,7 @@ $scriptMatches = @(
   'Start-IM.ps1',
   'Start-EchoAll.ps1',
   'Start-VisionProbe-Burst.ps1',
+  'Start-WhisperStreamToInbox.ps1',
   'LlamaChatDaemon.ps1',
   'Start-LocalLLM.ps1'
 )
@@ -41,6 +42,14 @@ Stop-Procs $llamaCli "llama-cli.exe"
 # (Optional) kill llama-server if running
 $llamaSrv = Get-WmiObject Win32_Process -Filter "name='llama-server.exe'"
 Stop-Procs $llamaSrv "llama-server.exe"
+
+# 2b) Kill whisper-stream (external mic recognizer) if running
+$whisper = Get-WmiObject Win32_Process -Filter "name='whisper-stream.exe'"
+Stop-Procs $whisper "whisper-stream.exe"
+
+# 2c) Kill whisper.cpp stream (CUDA build) if running
+$stream = Get-WmiObject Win32_Process -Filter "name='stream.exe'"
+Stop-Procs $stream "stream.exe"
 
 # 3) Kill Electron UI (if any) – keep narrow to Electron titled Echo
 $electron = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'electron' -and $_.MainWindowTitle -like '*Echo*' }

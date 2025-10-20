@@ -114,18 +114,31 @@ function Parse-ImJsonLoose {
   # Pull fields by regex even if braces are missing
   $summary = Get-RegexLastValue $t '"summary"\s*:\s*"([^"]*)"'
   $tagsStr = Get-RegexLastValue $t '"tags"\s*:\s*(\[[^\]]*\])'
-  $thoughtsStr = Get-RegexLastValue $t '"thoughts"\s*:\s*(\[[\s\S]*?\])'
+  # thoughts can be either array or string
+  $thoughtsArrStr = Get-RegexLastValue $t '"thoughts"\s*:\s*(\[[\s\S]*?\])'
+  $thoughtsStrOne = $null
+  if (-not $thoughtsArrStr) {
+    $thoughtsStrOne = Get-RegexLastValue $t '"thoughts"\s*:\s*"([\s\S]*?)"'
+  }
   $affStr = Get-RegexLastValue $t '"affect_nud(?:ge|e)"\s*:\s*(\{[\s\S]*?\})'
   $sugStr = Get-RegexLastValue $t '"suggestions"\s*:\s*(\[[\s\S]*?\])'
   $memTagsStr = Get-RegexLastValue $t '"memory_tags"\s*:\s*(\[[\s\S]*?\]|null)'
 
   $tags = @(); if ($tagsStr) { try { $tags = @((ConvertFrom-Json $tagsStr)) } catch { $tags = @() } }
-  $thoughts = @(); if ($thoughtsStr) { try { $thoughts = @((ConvertFrom-Json $thoughtsStr)) } catch { $thoughts = @() } }
+  $thoughts = @()
+  if ($thoughtsArrStr) {
+    try { $thoughts = @((ConvertFrom-Json $thoughtsArrStr)) } catch { $thoughts = @() }
+  } elseif ($thoughtsStrOne) {
+    # decode escapes by round-tripping through JSON
+    try { $thoughts = (ConvertFrom-Json ('"' + $thoughtsStrOne + '"')) } catch { $thoughts = $thoughtsStrOne }
+  }
   $sug = @(); if ($sugStr) { try { $sug = @((ConvertFrom-Json $sugStr)) } catch { $sug = @() } }
   $mem = $null; if ($memTagsStr) { try { $mem = (ConvertFrom-Json $memTagsStr) } catch { $mem = $null } }
   $aff = $null; if ($affStr) { try { $aff = (ConvertFrom-Json $affStr) } catch { $aff = $null } }
 
-  if (-not $summary -and $tags.Count -eq 0 -and $thoughts.Count -eq 0 -and $sug.Count -eq 0 -and -not $aff) { return $null }
+  $hasThoughts = $false
+  try { $hasThoughts = ( ($thoughts -is [string] -and $thoughts.Trim().Length -gt 0) -or (($thoughts -isnot [string]) -and $thoughts.Count -gt 0) ) } catch { $hasThoughts = $false }
+  if (-not $summary -and $tags.Count -eq 0 -and -not $hasThoughts -and $sug.Count -eq 0 -and -not $aff) { return $null }
   return [pscustomobject]@{
     summary      = $(if ($summary) { [string]$summary } else { '' })
     tags         = $tags
@@ -484,7 +497,7 @@ Return ONLY JSON array of strings:
       $llamaExe  = $(if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' })
       $gpuLayers = 40; if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } catch {} } elseif ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
       $t0 = Get-Date
-      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 220 -FlashAttn | Out-String
+      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize 4096 -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 220 -FlashAttn | Out-String
       $raw = $raw.Trim()
       $raw = $raw -replace '```json\s*', '' -replace '```\s*', ''
       $raw = $raw.Trim()
@@ -690,10 +703,8 @@ TASK
 - Produce exactly one JSON object describing the current situation as you perceive it (inner thoughts), grounded in the current context.
 
 REQUIRED KEYS (exactly these keys, no duplicates):
-- "summary": string (<=160 chars). Based on now.active_window.title/process and recent_conversation what do I think is happening? Do not just say what the window is, make an educated guess on what is happening on that window.
-- "tags": 3–5 short keywords about the current situation (e.g., ["steam","browsing","relaxed"]).
 - "thoughts": string (~400 chars). What do you think about whats going on? What are your desires, feelings, ideas, suggestions, beliefs about what is happening?
-- "affect_nudge": {"valence_delta": -0.1..0.1, "arousal_delta": -0.1..0.1, "dominance_delta": -0.1..0.1} balancing mood.
+- "affect_nudge": {"valence_delta": -0.1..0.1, "arousal_delta": -0.1..0.1, "dominance_delta": -0.1..0.1} balancing mood. Small changes to your mood based on the context of the conversation
 - "suggestions": array Only include if strongly relevant or idle/bored; this is an action YOU want to take. start suggestions with "I should..."
 - "memory_tags": array of up to 10 strings or null for any useful long-term tags.
 
@@ -702,8 +713,6 @@ INPUTS
 
 OUTPUT RULES
 - Output EXACTLY ONE JSON object. No prose, no extra lines.
-- Do NOT copy prev_summary or prev_tags; recompute from current inputs.
-- Only mention coding when active_window/process clearly indicates an IDE/terminal or recent_conversation is about code. If the app is Steam/NVIDIA/Discord/browsers, anchor to that context instead.
 - Describe what you see (window title/process) and your likely next nudge.
 
 Return ONLY JSON.
@@ -753,7 +762,7 @@ Return ONLY JSON.
       $llamaExe  = $(if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' })
       $gpuLayers = 40; if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } catch {} } elseif ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
       $t0 = Get-Date
-      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 400 -FlashAttn | Out-String
+      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize 4096 -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 400 -FlashAttn | Out-String
       $raw = $raw.Trim()
       # Remove markdown code blocks if present
       $raw = $raw -replace '```json\s*', '' -replace '```\s*', ''
@@ -993,8 +1002,26 @@ function Run-Tick {
   $sug = @()
   if ($im -and $im.suggestions) { $sug = $im.suggestions }
 
-  $thoughts = @()
-  if ($im -and $im.thoughts) { $thoughts = $im.thoughts }
+  # Normalize thoughts to a single string (model may return string or array)
+  $thoughtsText = ''
+  if ($im -and $im.thoughts) {
+    $t = $im.thoughts
+    if ($t -is [string]) {
+      $thoughtsText = [string]$t
+    } elseif ($t -is [System.Collections.IEnumerable] -and $t -isnot [string]) {
+      $items = @()
+      foreach ($x in $t) {
+        if ($null -eq $x) { continue }
+        try {
+          if ($x.PSObject -and $x.PSObject.Properties.Match('content').Count -gt 0) { $items += ('' + $x.content) }
+          else { $items += ('' + $x) }
+        } catch { $items += ('' + $x) }
+      }
+      if ($items.Count -gt 0) { $thoughtsText = ($items -join ' ') }
+    } else {
+      $thoughtsText = ("" + $t)
+    }
+  }
 
   # In Run-Tick, after getting IM response:
   $shallowMem = @()
@@ -1020,7 +1047,7 @@ function Run-Tick {
     idle_sec        = $tele.idle_sec
     summary         = $summary
     tags            = $tags
-    thoughts        = $thoughts
+    thoughts        = $thoughtsText
     suggestions     = $sug
     shallow_memory  = $shallowMem
   }

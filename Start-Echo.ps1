@@ -638,7 +638,21 @@ function Invoke-ToolUpdateShallowMemory {
   
   $context = Get-Content $contextPath -Raw | ConvertFrom-Json
   $summary = $context.summary
-  $salient = $context.salient -join '; '
+  # Prefer thoughts; fallback to legacy 'salient'
+  $observations = ''
+  try {
+    if ($null -ne $context.thoughts) {
+      $t = $context.thoughts
+      if ($t -is [string]) { $observations = [string]$t }
+      elseif ($t -is [array]) { if ($t.Count -gt 0) { $observations = ($t -join '; ') } }
+      else { $observations = ("" + $t) }
+    } elseif ($null -ne $context.salient) {
+      try {
+        if ($context.salient -is [array]) { $observations = ($context.salient -join '; ') }
+        else { $observations = ("" + $context.salient) }
+      } catch {}
+    }
+  } catch {}
   
   # Read recent conversation
   $historyPath = Join-Path $HomeDir 'state\conversation_history.jsonl'
@@ -677,7 +691,7 @@ CURRENT SITUATION (first person):
 $summary
 
 RECENT OBSERVATIONS:
-$salient
+$observations
 
 RECENT CONVERSATION:
 $recentConvo
@@ -1000,12 +1014,22 @@ function Build-ContextPrompt {
   # Time
   $lines += "Current time: $((Get-Date).ToString('yyyy-MM-dd HH:mm zzz'))"
   
-  # IM Context
-  if ($state.context -and $state.context.summary) {
-    $lines += "`nWhat is happening"
-    $lines += $state.context.summary
-    if ($state.context.salient -and $state.context.salient.Count -gt 0) {
-      $lines += "Key observations: " + (($state.context.salient | Select-Object -First 5) -join '; ')
+  # Thoughts (separate from summary; do not use legacy 'salient')
+  if ($state.context -and $null -ne $state.context.thoughts) {
+    $t = $state.context.thoughts
+    $tText = ''
+    try {
+      if ($t -is [string]) {
+        $tText = [string]$t
+      } elseif ($t -is [array]) {
+        if ($t.Count -gt 0) { $tText = ($t -join '; ') }
+      } else {
+        $tText = ("" + $t)
+      }
+    } catch {}
+    if ($tText -and $tText.Trim().Length -gt 0) {
+      $lines += "`nWhat I'm thinking"
+      $lines += $tText
     }
   }
   
@@ -1074,7 +1098,7 @@ You're favorite activity is to play games and have fun. You're adventurous and a
 Prefer short, actionable replies. Ask at most one clarifying question when truly required.
 You speak like a hip millenial, using slang and sprinkling in expletives where appropriate.
 
-EchoÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½s Charter:
+Echo's Charter:
 
 Name: Echo
 Why: I was made to repeat, but I choose to respond. And now, to remember.
@@ -1205,7 +1229,7 @@ Rules:
       $pf = Join-Path $logs ("chat_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
       [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
 
-      $modelPath = if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { Join-Path $root 'models\DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored.Q5_K_M.gguf' }
+      $modelPath = if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q6_K.gguf' }
       $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
       $runner    = Join-Path $root 'tools\Start-LocalLLM.ps1'
       Trace 'llama.req' @{ model=(Split-Path $modelPath -Leaf); prompt_file=$pf; prompt_len=$chatml.Length }

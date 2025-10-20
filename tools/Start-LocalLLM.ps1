@@ -2,11 +2,13 @@
   [Parameter(Mandatory=$true)][string]$PromptFile,
   [string]$ModelPath = "D:\Echo\models\athirdpath-NSFW_DPO_Noromaid-7b-Q6_K.gguf",
   [string]$LlamaExe  = "D:\llama-cpp\llama-cli.exe",
-  [int]$CtxSize      = 8192,
+  [int]$CtxSize      = 4096,
   [int]$GpuLayers    = 40,
   [int]$MaxTokens    = 1024,
   [double]$Temp      = 0.7,
-  [switch]$FlashAttn
+  [switch]$FlashAttn,
+  [string[]]$Images,
+  [string]$Mmproj
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,39 +20,98 @@ $ts = Get-Date -Format "yyyy-MM-dd_HH-mm-ss_fff"
 $logF = Join-Path $Logs "llama-$ts-$PID.log"
 $errF = Join-Path $Logs "llama-$ts-$PID.err.log"
 
+# Optional thread cap via env
+$llamaThreads = 0
+try { if ($env:ECHO_LLAMA_THREADS -and $env:ECHO_LLAMA_THREADS.Trim()) { $llamaThreads = [int]$env:ECHO_LLAMA_THREADS } } catch {}
+try { if ($llamaThreads -le 0 -and $env:ECHO_IM_THREADS -and $env:ECHO_IM_THREADS.Trim()) { $llamaThreads = [int]$env:ECHO_IM_THREADS } } catch {}
+
+# Optional GPU layer override via env (if set)
+try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $GpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
+try { if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { $GpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } } catch {}
+
+# Optional context size override via env (if set)
+try { if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { $CtxSize = [int]$env:ECHO_LLAMA_CTX } } catch {}
+try { if ($env:ECHO_IM_CTX -and $env:ECHO_IM_CTX.Trim()) { $CtxSize = [int]$env:ECHO_IM_CTX } } catch {}
+
+# Optional mmproj override via env (if not explicitly provided)
+if (-not $Mmproj -and $env:ECHO_VISION_MMPROJ) {
+  try {
+    $p = $env:ECHO_VISION_MMPROJ
+    $invalid = [System.IO.Path]::GetInvalidPathChars()
+    if ($p -and $p.IndexOfAny($invalid) -eq -1 -and (Test-Path -LiteralPath $p)) { $Mmproj = $p }
+  } catch {}
+}
+
 # Build args with compatibility for different llama binaries
 function Get-LlamaArgs {
   param(
-    [string]$Exe,[string]$Model,[int]$Ctx,[int]$Gpu,[int]$Max,[double]$Temperature,[string]$Prompt,[switch]$Flash
+    [string]$Exe,[string]$Model,[int]$Ctx,[int]$Gpu,[int]$Max,[double]$Temperature,[string]$Prompt,[switch]$Flash,[string[]]$Imgs,[string]$Mm
   )
   $help = ''
   try { $help = (& $Exe -h 2>&1 | Out-String) } catch { try { $help = (& $Exe --help 2>&1 | Out-String) } catch { $help = '' } }
+  $leaf = try { (Split-Path -Leaf $Exe) } catch { '' }
+  $isMtmd = ($leaf -ieq 'llama-mtmd-cli.exe' -or $help -like '*Experimental CLI for multimodal*')
   $useLong = ($help -like '*--prompt-file*')
   $hasNoDisplay = ($help -like '*--no-display-prompt*')
   $hasFlash = ($help -like '*--flash-attn*')
   $hasNoCnv = ($help -like '*-no-cnv*' -or $help -like '*--no-cnv*')
+  $hasImage = ($help -like '*--image*' -or $help -like '*-i, --image*') -or $isMtmd
+  $hasMmproj = ($help -like '*--mmproj*') -or $isMtmd
 
-  $a = @("-m", $Model, "--ctx-size", $Ctx, "--n-gpu-layers", $Gpu, "--n-predict", $Max, "--temp", $Temperature)
-  if ($useLong) {
+  if ($isMtmd) {
+    $a = @("-m", $Model, "--ctx-size", $Ctx, "--n-gpu-layers", $Gpu, "--n-predict", $Max, "--temp", $Temperature)
+    # mtmd CLI: use -f for prompt; no explicit stop flag
+    $a += @("-f", $Prompt)
+    # vision flags handled below
+  } else {
+    $a = @("-m", $Model, "--ctx-size", $Ctx, "--n-gpu-layers", $Gpu, "--n-predict", $Max, "--temp", $Temperature)
+    if ($useLong) {
     # Do not enable --verbose-prompt to avoid echoing prompt to STDOUT
     $a += @("--prompt-file", $Prompt)
     if ($hasNoDisplay) { $a += "--no-display-prompt" }
     # Only stop on assistant end token so generation proceeds
     $a += @("--stop", "<|im_end|>")
-    if ($hasNoCnv) { $a += "-no-cnv" }
+    # IMPORTANT: Do NOT auto-append -no-cnv here; leave chat templating enabled by default.
   } else {
     # Fallback to short flags commonly supported by older/main builds
     $a += @("-f", $Prompt, "-r", "<|im_end|>")
   }
+  }
   if ($Flash -and $hasFlash) { $a += @("--flash-attn") }
+  
+  # Vision: attach images and optional mmproj if supported
+  if ($Imgs -and $Imgs.Count -gt 0 -and $hasImage) {
+    foreach ($img in $Imgs) {
+      if ($img -and (Test-Path $img)) { $a += @('--image', $img) }
+    }
+  }
+  if ($Mm -and $hasMmproj -and (Test-Path $Mm)) {
+    $a += @('--mmproj', $Mm)
+  }
   return ,$a
 }
 
-$args = Get-LlamaArgs -Exe $LlamaExe -Model $ModelPath -Ctx $CtxSize -Gpu $GpuLayers -Max $MaxTokens -Temperature $Temp -Prompt $PromptFile -Flash:$FlashAttn
+$args = Get-LlamaArgs -Exe $LlamaExe -Model $ModelPath -Ctx $CtxSize -Gpu $GpuLayers -Max $MaxTokens -Temperature $Temp -Prompt $PromptFile -Flash:$FlashAttn -Imgs $Images -Mm $Mmproj
+
+# Append threads flag if requested
+if ($llamaThreads -gt 0) {
+  $help = ''
+  try { $help = (& $LlamaExe -h 2>&1 | Out-String) } catch { try { $help = (& $LlamaExe --help 2>&1 | Out-String) } catch { $help = '' } }
+  $hasThreadsShort = ($help -like '* -t *' -or $help -like '*-t, --threads*')
+  $hasThreadsLong  = ($help -like '*--threads*')
+  if ($hasThreadsShort) { $args += @('-t', $llamaThreads) }
+  elseif ($hasThreadsLong) { $args += @('--threads', $llamaThreads) }
+}
 
 # Optional override to force disabling chat templating regardless of help detection
+# Only append if the binary actually supports it; mtmd builds typically do not.
 if ($env:ECHO_LLAMA_NO_CNV -and ($env:ECHO_LLAMA_NO_CNV -match '^(1|true|yes)$')) {
-  if (-not ($args -contains '-no-cnv')) { $args += '-no-cnv' }
+  $help2 = ''
+  try { $help2 = (& $LlamaExe -h 2>&1 | Out-String) } catch { try { $help2 = (& $LlamaExe --help 2>&1 | Out-String) } catch { $help2 = '' } }
+  $supportsNoCnv = ($help2 -like '*-no-cnv*' -or $help2 -like '*--no-cnv*')
+  if ($supportsNoCnv -and -not ($args -contains '-no-cnv')) {
+    $args += '-no-cnv'
+  }
 }
 
 $hdr = @"
@@ -59,6 +120,7 @@ Time:        $ts
 Model:       $ModelPath
 Ctx:         $CtxSize
 GPU layers:  $GpuLayers
+Threads:     $llamaThreads
 Max tokens:  $MaxTokens
 Temp:        $Temp
 PromptFile:  $PromptFile
@@ -129,15 +191,54 @@ $endTag = '<|im_end|>'
 $endIdx = $clean.IndexOf($endTag)
 if ($endIdx -ge 0) { $clean = $clean.Substring(0, $endIdx) }
 
-# 4) Trim any stray init/perf lines that might have slipped through
+# 4) Handle non-ChatML templates that prefix with literal 'user'/'assistant' lines
+try {
+  $m = [regex]::Match($clean, '(?ms)^(?:\s*user\s*\n)(.*?)(?:\n\s*assistant\s*\n)([\s\S]*)$')
+  if ($m.Success) { $clean = $m.Groups[2].Value }
+} catch {}
+
+# 5) If prompt text was echoed, remove it from the head (exact or per-line)
+try {
+  $pt = ($promptText -replace "\r\n?","`n")
+  $cl = $clean
+  if ($pt) {
+    # Exact prefix match
+    if ($cl.StartsWith($pt)) {
+      $cl = $cl.Substring($pt.Length)
+      $cl = $cl.TrimStart(" `t`r`n")
+    } else {
+      # Line-by-line prefix trim
+      $ptLines = @($pt -split "`n")
+      $clLines = @($cl -split "`n")
+      $i = 0
+      while ($i -lt $ptLines.Count -and $i -lt $clLines.Count -and ($ptLines[$i].Trim() -eq $clLines[$i].Trim())) { $i++ }
+      if ($i -gt 0) { $cl = ($clLines[$i..($clLines.Count-1)] -join "`n") }
+    }
+  }
+  $clean = $cl
+} catch {}
+
+# 6) Trim any stray init/perf lines and prompt echoes
 $lines = $clean -split "`n"
 $lines = $lines | Where-Object {
   ($_ -ne '') -and
   -not ($_ -match '^(Device \d+:|build: |PEER_MAX_BATCH_SIZE =|LLAMAFILE =|OPENMP =)') -and
   -not ($_ -match '^(repeat_last_n|dry_multiplier|top_k|mirostat)') -and
+  -not ($_ -match '^(ggml_|load_backend:|system_info:|llama_|sampler:)') -and
+  -not ($_ -match '^(main:|encoding image slice|image slice encoded|decoding image batch|image decoded)') -and
   -not ($_ -match '^\s*unaccounted \|')
 }
+$lines = $lines | Where-Object { -not ($_ -match '^(user|assistant|system)\s*$') }
+$lines = $lines | Where-Object { -not ($_ -match '^(?:>\s*)?EOF by user' ) -and -not ($_ -match '^(?:>\s*)?Interrupted by user') }
 $clean = ($lines -join "`n").Trim()
+
+# 7) If the remaining text still looks like instruction-only content, clear it
+try {
+  $low = $clean.ToLower()
+  if ($low -match '^\s*(describe the screenshot|you are describing a screenshot|write\s+\d+\D{0,3}\d+\s+short sentences|format as:|ensure all texts|avoid mentioning|no speculation)') {
+    $clean = ''
+  }
+} catch {}
 
 # Append JSONL to the Echo bus (with simple retry if locked)
 $rec = [ordered]@{
@@ -190,4 +291,3 @@ Add-JsonlSafe -Path $Outbx -Line $line
 
 # Also emit the generated text on STDOUT for callers that capture output
 Write-Output $clean
-

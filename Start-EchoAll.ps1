@@ -1,4 +1,4 @@
-# Start-EchoAll.ps1 – launch Echo stack (chat + IM + Vision + UI) and ensure Ollama is running + warmed
+﻿# Start-EchoAll.ps1 â€“ launch Echo stack (chat + IM + Vision + UI) and ensure Ollama is running + warmed
 # Windows PowerShell 5.1+
 
 $ErrorActionPreference = 'Stop'
@@ -257,12 +257,154 @@ if ($env:ECHO_USE_LLAMA_CPP -match '^(1|true|yes)$') {
 } else {
   Write-Host "[EchoAll] Skipping Chat/IM processes (no backend enabled)."
 }
+
+# Start an arbitrary executable with args, hidden, with log capture
+function Start-ChildRaw {
+  param(
+    [Parameter(Mandatory=$true)][string]$Name,
+    [Parameter(Mandatory=$true)][string]$Exe,
+    [string[]]$Args = @(),
+    [Parameter(Mandatory=$true)][string]$WorkingDirectory,
+    [hashtable]$Env = $null
+  )
+  $ts = (Get-Date -Format 'yyyyMMdd_HHmmss')
+  $out = Join-Path $logs ("{0}-{1}.out.log" -f $Name, $ts)
+  $err = Join-Path $logs ("{0}-{1}.err.log" -f $Name, $ts)
+  $psi = @{}
+  if ($Env -and $Env.Count -gt 0) {
+    # Build a single command line with inline env setup
+    $pairs = @()
+    foreach ($k in $Env.Keys) { $pairs += ('set "{0}={1}"' -f $k, $Env[$k]) }
+    $envSet = ($pairs -join ' && ')
+    $exeQ = '"' + $Exe + '"'
+    $argQ = @()
+    foreach ($a in $Args) {
+      if ($a -match '\s' -and -not ($a.StartsWith('"') -and $a.EndsWith('"'))) { $argQ += ('"' + $a + '"') } else { $argQ += $a }
+    }
+    $cmd = ($envSet + ' && ' + $exeQ + ' ' + ($argQ -join ' ')).Trim()
+    $psi = @{
+      FilePath               = 'cmd.exe'
+      ArgumentList           = @('/c', $cmd)
+      WorkingDirectory       = $WorkingDirectory
+      RedirectStandardOutput = $out
+      RedirectStandardError  = $err
+      WindowStyle            = 'Hidden'
+      PassThru               = $true
+    }
+  } else {
+    $psi = @{
+      FilePath               = $Exe
+      ArgumentList           = $Args
+      WorkingDirectory       = $WorkingDirectory
+      RedirectStandardOutput = $out
+      RedirectStandardError  = $err
+      WindowStyle            = 'Hidden'
+      PassThru               = $true
+    }
+  }
+  try {
+    $p = Start-Process @psi
+    Write-Host ("[EchoAll] Started {0} (PID {1})" -f $Name, $p.Id)
+    Write-Host ("[EchoAll]   -> STDOUT: {0}" -f $out)
+    Write-Host ("[EchoAll]   -> STDERR: {0}" -f $err)
+    return [pscustomobject]@{ Name=$Name; Process=$p; Out=$out; Err=$err }
+  } catch {
+    Write-Host ("[EchoAll] Failed to start {0}: {1}" -f $Name, $_.Exception.Message)
+    return $null
+  }
+}
 $env:ECHO_HOST_FLAG = Join-Path $HOME_DIR 'state\vision.enabled'
 $flagFile = $env:ECHO_HOST_FLAG
 if (-not (Test-Path $flagFile)) {
   New-Item -ItemType File -Path $flagFile -Force | Out-Null
 }
+
+# VisionProbe configuration (prefer llama.cpp mtmd + local LLaVA)
+if (-not $env:LLAMA_VISION_EXE -or -not (Test-Path -LiteralPath $env:LLAMA_VISION_EXE)) {
+  if (Test-Path 'D:\\llama-cpp\\llama-mtmd-cli.exe') { $env:LLAMA_VISION_EXE = 'D:\\llama-cpp\\llama-mtmd-cli.exe' }
+}
+$visionModelPath = Join-Path $HOME_DIR 'models\\llava-phi-3-mini-f16.gguf'
+$visionMmproj    = Join-Path $HOME_DIR 'models\\llava-phi-3-mini-mmproj-f16.gguf'
+if ((-not $env:ECHO_VISION_MODEL) -and (Test-Path -LiteralPath $visionModelPath)) { $env:ECHO_VISION_MODEL = $visionModelPath }
+if ((-not $env:ECHO_VISION_MMPROJ) -and (Test-Path -LiteralPath $visionMmproj)) { $env:ECHO_VISION_MMPROJ = $visionMmproj }
+if (-not $env:ECHO_VISION_CTX   -or -not $env:ECHO_VISION_CTX.Trim())   { $env:ECHO_VISION_CTX   = '1536' }
+if (-not $env:ECHO_VISION_NPREDICT -or -not $env:ECHO_VISION_NPREDICT.Trim()) { $env:ECHO_VISION_NPREDICT = '160' }
+if (-not $env:ECHO_VISION_SENTENCES -or -not $env:ECHO_VISION_SENTENCES.Trim()) { $env:ECHO_VISION_SENTENCES = '4' }
+if (-not $env:ECHO_VISION_FAST -or -not $env:ECHO_VISION_FAST.Trim()) { $env:ECHO_VISION_FAST = '0' }
+
+# Start llama.cpp vision server to keep model warm (if available and not already running)
+try {
+  $visionSrvExe = if ($env:LLAMA_SERVER_EXE -and (Test-Path -LiteralPath $env:LLAMA_SERVER_EXE)) { $env:LLAMA_SERVER_EXE } elseif (Test-Path 'D:\\llama-cpp\\llama-server.exe') { 'D:\\llama-cpp\\llama-server.exe' } else { $null }
+  $visionPort = if ($env:ECHO_VISION_PORT -and $env:ECHO_VISION_PORT.Trim()) { [int]$env:ECHO_VISION_PORT } else { 8089 }
+  $visionHost = "http://127.0.0.1:$visionPort"
+  # Force VisionProbe to use the server
+  $env:ECHO_VISION_SERVER  = $visionHost
+  $env:ECHO_VISION_BACKEND = 'llama_server'
+
+  function Test-VisionServerReachable([string]$Base,[int]$TimeoutSec=2) {
+    try {
+      $uri = ($Base.TrimEnd('/') + '/health')
+      Invoke-RestMethod -Method Get -Uri $uri -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
+      return $true
+    } catch {
+      try {
+        $uri2 = ($Base.TrimEnd('/') + '/version')
+        Invoke-RestMethod -Method Get -Uri $uri2 -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
+        return $true
+      } catch { return $false }
+    }
+  }
+  $canStartServer = $visionSrvExe -and (Test-Path -LiteralPath $visionModelPath) -and (Test-Path -LiteralPath $visionMmproj)
+  if ($canStartServer -and -not (Test-VisionServerReachable $visionHost 1)) {
+    $ngl = if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $env:ECHO_LLAMA_GPU_LAYERS.Trim() } else { '33' }
+    $thr = if ($env:ECHO_LLAMA_THREADS -and $env:ECHO_LLAMA_THREADS.Trim()) { @('-t', $env:ECHO_LLAMA_THREADS.Trim()) } else { @() }
+    $args = @('-m', $visionModelPath, '--mmproj', $visionMmproj, '--ctx-size','1536','--n-gpu-layers', $ngl,'--host','127.0.0.1','--port',"$visionPort") + $thr
+    $vs = Start-ChildRaw -Name 'llama-vision-server' -Exe $visionSrvExe -Args $args -WorkingDirectory $HOME_DIR
+    $tries = 0; while ($tries -lt 20) { if (Test-VisionServerReachable $visionHost 2) { break }; Start-Sleep -Milliseconds 500; $tries++ }
+  }
+} catch { }
+
+# Print vision config summary
+Write-Host ("[EchoAll] Vision backend  = {0}" -f $env:ECHO_VISION_BACKEND)
+Write-Host ("[EchoAll] Vision server   = {0}" -f $env:ECHO_VISION_SERVER)
+if ($env:ECHO_VISION_MODEL)  { Write-Host ("[EchoAll] Vision model    = {0}" -f $env:ECHO_VISION_MODEL) }
+if ($env:ECHO_VISION_MMPROJ) { Write-Host ("[EchoAll] Vision mmproj   = {0}" -f $env:ECHO_VISION_MMPROJ) }
 $vision = Start-Child -Name 'echo-vision' -File (Join-Path $HOME_DIR 'Start-VisionProbe-Burst.ps1') -WorkingDirectory $HOME_DIR -Args @('-BurstIntervalSec','10')
+
+# ---------------------------
+# Launch Whisper Stream -> Inbox
+# ---------------------------
+$whisper = $null
+try {
+  $wsPath = Join-Path $HOME_DIR 'tools\Start-WhisperStreamToInbox.ps1'
+  if (Test-Path -LiteralPath $wsPath) {
+    $wsArgs = @()
+    # Threads cap to reduce CPU load (optional)
+    if ($env:ECHO_WHISPER_THREADS -and $env:ECHO_WHISPER_THREADS.Trim()) {
+      $wsArgs += @('-Threads', $env:ECHO_WHISPER_THREADS.Trim())
+    }
+    # Force CPU if requested explicitly
+    if ($env:ECHO_WHISPER_NO_GPU -and $env:ECHO_WHISPER_NO_GPU.Trim() -match '^(1|true|yes)$') {
+      $wsArgs += '-NoGPU'
+    } else {
+      # Prefer GPU by default; allow explicit layer override
+      if ($env:ECHO_WHISPER_NGL -and $env:ECHO_WHISPER_NGL.Trim()) {
+        $wsArgs += @('-GpuLayers', $env:ECHO_WHISPER_NGL.Trim())
+      } else {
+        $wsArgs += '-UseGPU'
+      }
+    }
+    if ($env:ECHO_WHISPER_FLASH -and $env:ECHO_WHISPER_FLASH.Trim() -match '^(1|true|yes)$') {
+      $wsArgs += '-FlashAttn'
+    }
+    $whisper = Start-Child -Name 'whisper-stream' -File $wsPath -WorkingDirectory $HOME_DIR -Args $wsArgs
+    Write-Host "[EchoAll] Whisper stream launched."
+  } else {
+    Write-Host "[EchoAll] Whisper stream not found (tools\\Start-WhisperStreamToInbox.ps1)."
+  }
+} catch {
+  Write-Host ("[EchoAll] Whisper stream launch error: " + $_.Exception.Message)
+}
 
 # ---------------------------
 # Launch UI (if present)
@@ -305,6 +447,7 @@ Write-Host "[EchoAll]   Echo stack launched."
 if ($chat)   { Write-Host ("[EchoAll]   Chat   PID: {0}" -f $chat.Process.Id) }
 if ($im)     { Write-Host ("[EchoAll]   IM     PID: {0}" -f $im.Process.Id) }
 if ($vision) { Write-Host ("[EchoAll]   Vision PID: {0}" -f $vision.Process.Id) }
+if ($whisper){ Write-Host ("[EchoAll]   Whisper PID: {0}" -f $whisper.Process.Id) }
 if ($ui)     { Write-Host ("[EchoAll]   UI     PID: {0}" -f $ui.Process.Id) }
 Write-Host ("[EchoAll]   Logs: {0} (per-process .out/.err files)" -f $logs)
 Write-Host "[EchoAll] ==============================================="
@@ -317,6 +460,7 @@ $procs = @()
 if ($chat)   { $procs += $chat }
 if ($im)     { $procs += $im }
 if ($vision) { $procs += $vision }
+if ($whisper){ $procs += $whisper }
 if ($ui)     { $procs += $ui }
 
 while ($true) {
@@ -330,3 +474,4 @@ while ($true) {
   Start-Sleep -Milliseconds 500
   if ($procs.Count -eq 0) { break }
 }
+

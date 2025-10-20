@@ -1,19 +1,22 @@
-﻿{
-    "summary":  "Unable to generate caption",
-    "salient":  [
-
-                ],
-    "burst":  {
-                  "first_frame":  "frame_20251014-152500-051.png",
-                  "frame_count":  6,
-                  "duration_sec":  2,
-                  "fps":  3,
-                  "last_frame":  "frame_20251014-152502-157.png"
-              },
+{
+    "visible_text":  [
+                         "How I Beat an Impossible, Glitched and Corrupted Randomizer - YouTube"
+                     ],
+    "ts":  "2025-10-19T21:55:20.6936380-04:00",
     "active_window":  {
-                          "title":  "Nozomi.la | by ????@????C19a and pixiv id 273185 - Google Chrome",
+                          "title":  "(2513) How I Beat an Impossible, Glitched and Corrupted Randomizer - YouTube - Google Chrome",
                           "exe":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
                           "process":  "chrome"
                       },
-    "ts":  "2025-10-14T15:25:04.4007903-04:00"
+    "burst":  {
+                  "first_frame":  "frame_20251019-215401-951.jpg",
+                  "frame_count":  1,
+                  "duration_sec":  0,
+                  "fps":  0,
+                  "last_frame":  "frame_20251019-215401-951.jpg"
+              },
+    "summary":  "The image captures a moment from a video game, set in a room with a stone wall and a wooden door. The room is dimly lit, adding an air of mystery to the scene. In the center of the room, a character is in action. The character, dressed in a blue and white outfit, is holding a sword and appears to be attacking a target.",
+    "salient":  [
+
+                ]
 }

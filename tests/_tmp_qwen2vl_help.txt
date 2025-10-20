@@ -1,0 +1,5 @@
+
+WARNING: The binary 'llama-qwen2vl-cli.exe' is deprecated.
+Please use 'llama-mtmd-cli' instead.
+
+
