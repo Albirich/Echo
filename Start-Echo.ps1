@@ -1,4 +1,4 @@
-# Start-Echo.ps1 ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½ Echo agentic brain
+# Start-Echo.ps1 - Echo agentic brain
 # Reactive to user messages + proactive from IM proposals
 # Tool-capable with multi-turn execution loops
 
@@ -46,7 +46,7 @@ if ($EmitPromptFile) {
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $env:ECHO_HOME -or -not (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME = $ScriptRoot }
 if (-not $env:OLLAMA_HOST   -or $env:OLLAMA_HOST   -eq '') { $env:OLLAMA_HOST   = 'http://127.0.0.1:11434' }
-if (-not $env:ECHO_CHAT_MODEL -or $env:ECHO_CHAT_MODEL -eq '') { $env:ECHO_CHAT_MODEL = 'athirdpath-NSFW_DPO_Noromaid-7b-Q6_K.gguf' }
+if (-not $env:ECHO_CHAT_MODEL -or $env:ECHO_CHAT_MODEL -eq '') { $env:ECHO_CHAT_MODEL = 'athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf' }
 if (-not $env:ECHO_MODEL -or $env:ECHO_MODEL -eq '') { $env:ECHO_MODEL = $env:ECHO_CHAT_MODEL }
 if (-not $env:ECHO_STAND    -or $env:ECHO_STAND    -eq '') { $env:ECHO_STAND    = (Join-Path $env:ECHO_HOME 'stand') }
 
@@ -132,13 +132,27 @@ function Load-ConversationHistory([int]$Max = 10) {
       foreach ($ln in $lines) {
         try {
           $obj = $ln | ConvertFrom-Json
-          if ($obj.role -and $obj.content) { $messages += @{ role=$obj.role; content=$obj.content } }
+          if ($obj.role -and $obj.content) {
+            $speaker = switch -Regex ($obj.role.ToString().ToLowerInvariant()) {
+              '^user$'       { 'Desmond'; break }
+              '^assistant$'  { 'Echo'; break }
+              '^system$'     { 'Echos Thoughts'; break }
+              default        { $obj.role }
+            }
+            $messages += @{
+              role    = $speaker
+              content = $obj.content
+            }
+            # If you want to preserve the original for debugging, add:
+            # $messages[-1].original_role = $obj.role
+          }
         } catch { }
       }
     }
   } catch { }
   return ,$messages
 }
+
 
 function Read-TextUtf8NoBom([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) { return '' }
@@ -156,6 +170,32 @@ function Truncate-Text([string]$s, [int]$max=6000) {
   if (-not $s) { return '' }
   if ($s.Length -le $max) { return $s }
   return .Substring(0,[Math]::Max(0,-1)) + '...'
+}
+
+
+function Clean-AssistantOutput([string]$text) {
+  if (-not $text) { return '' }
+  $nl = ($text -replace "\r\n?","`n")
+  $lines = @($nl -split "`n")
+  $out = New-Object System.Collections.Generic.List[string]
+  $skipTools = $false
+  $skipHow = 0
+  $skipWhat = 0
+  foreach ($l in $lines) {
+    $t = ($l.Trim())
+    if ($skipTools) { continue }
+    if ($t -match '^(?i)#\s*MY\s*TOOLS\s*$') { $skipTools = $true; continue }
+    if ($t -match '^(?i)AVAILABLE\s+TOOLS:') { $skipTools = $true; continue }
+    if ($t -match '^(?i)Current\s+time:') { continue }
+    if ($t -match '^(?i)How\s+I\s+feel:') { $skipHow = 6; continue }
+    if ($t -match '^(?i)What\s+I\s+see\s*$') { $skipWhat = 2; continue }
+    if ($skipHow -gt 0) { $skipHow--; continue }
+    if ($skipWhat -gt 0) { $skipWhat--; continue }
+    # Drop stray role echoes sometimes produced by certain templates
+    if ($t -match '^(?i)(user|assistant|system)\s*$') { continue }
+    $out.Add($l)
+  }
+  return ($out -join "`n").Trim()
 }
 
 
@@ -723,7 +763,7 @@ Rules:
       model = $env:ECHO_MODEL
       stream = $false
       messages = @(@{ role='user'; content=$prompt })
-      options = @{ temperature=0.3; num_predict=300; gpu_layers=999 }
+      options = @{ temperature=0.3; num_predict=300; num_gpu=40; num_ctx=2048; num_batch=16 }
     } | ConvertTo-Json -Depth 10
     
     $uri = "$($env:OLLAMA_HOST.TrimEnd('/'))/api/chat"
@@ -1007,6 +1047,133 @@ function Maybe-AdjustAvatarFromVad {
     try { ($save | ConvertTo-Json -Compress) | Set-Content -NoNewline -Encoding UTF8 -LiteralPath $flagPath } catch {}
   }
 }
+
+function Get-VisionStruct {
+    param(
+        [string]$Path = "D:\Echo\state\vision.struct.json"
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try { (Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json) } catch { $null }
+}
+
+function Test-GarbledText {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $true }
+    $len   = $Text.Length
+    $clean = ($Text -replace '[^A-Za-z0-9\s:\.\,\;\!\?\/%\-\(\)]','')
+    $ratio = if ($len -gt 0) { $clean.Length / $len } else { 0 }
+    # Heuristic: if less than 60% of chars look like normal text, call it "hard to make out"
+    return ($ratio -lt 0.6)
+}
+
+function Load-LatestVision {
+    param(
+        [string]$Path = "D:\Echo\state\vision.struct.json"
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+    if (-not $raw) { return $null }
+
+    # Try standard JSON first
+    try {
+        $json = $raw | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $json) { return $null }
+
+        # If it's an array, take the last entry
+        if ($json -is [System.Array]) {
+            if ($json.Count -gt 0) { return $json[-1] } else { return $null }
+        }
+
+        # If it's an object that contains a frames/items array, take its last
+        foreach ($k in 'frames','items','entries') {
+            if ($json.PSObject.Properties.Match($k).Count -gt 0) {
+                $arr = $json.$k
+                if ($arr -and $arr.Count -gt 0) { return $arr[-1] }
+            }
+        }
+
+        # Otherwise it’s a single snapshot object
+        return $json
+    } catch {
+        # Fallback: assume JSONL (pick last non-empty line and parse)
+        $lines = Get-Content -LiteralPath $Path -Encoding UTF8 | Where-Object { $_ -and $_.Trim().Length -gt 0 }
+        if ($lines.Count -eq 0) { return $null }
+        try {
+            return ($lines[-1] | ConvertFrom-Json)
+        } catch {
+            return $null
+        }
+    }
+}
+
+function Normalize-Vision {
+    param($V)
+    if ($null -eq $V) { return $null }
+
+    # Clone into a PSCustomObject with expected shape
+    $o = [pscustomobject]@{
+        ts       = $null
+        window   = [pscustomobject]@{ title = $null; app = $null; size = $null }
+        tags     = @()     # list of {name, score?}
+        ocr_top  = @()     # list of strings
+        layout   = $null
+    }
+
+    # Timestamp variants
+    foreach ($k in 'ts','timestamp','time','when') {
+        if ($V.PSObject.Properties.Match($k).Count) { $o.ts = $V.$k; break }
+    }
+
+    # Window/title/app variants
+    if ($V.window) {
+        $o.window.title = $V.window.title
+        $o.window.app   = $V.window.app
+        $o.window.size  = $V.window.size
+    } else {
+        foreach ($k in 'title','windowTitle') { if ($V.PSObject.Properties.Match($k).Count) { $o.window.title = $V.$k; break } }
+        foreach ($k in 'app','process','exe') { if ($V.PSObject.Properties.Match($k).Count) { $o.window.app   = $V.$k; break } }
+        if (-not $o.window.size -and $V.PSObject.Properties.Match('size').Count) { $o.window.size = $V.size }
+    }
+
+    # Layout (optional)
+    if ($V.PSObject.Properties.Match('layout').Count) { $o.layout = $V.layout }
+
+    # Tags can be [{name,score}] or ["menu","chat window",...]
+    if ($V.PSObject.Properties.Match('tags').Count) {
+        $t = $V.tags
+        if ($t -is [System.Array]) {
+            $o.tags = @(
+                foreach ($it in $t) {
+                    if ($it -is [string]) {
+                        [pscustomobject]@{ name = $it; score = $null }
+                    } elseif ($it.PSObject.Properties.Match('name').Count) {
+                        # Keep as-is, ensure 'name' exists
+                        [pscustomobject]@{
+                            name  = $it.name
+                            score = (if ($it.PSObject.Properties.Match('score').Count) { $it.score } else { $null })
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    # OCR lines can be under several keys: ocr_top, ocrTop, ocr.lines, text_lines, text
+    $lines = @()
+    if ($V.PSObject.Properties.Match('ocr_top').Count) { $lines = $V.ocr_top }
+    elseif ($V.PSObject.Properties.Match('ocrTop').Count) { $lines = $V.ocrTop }
+    elseif ($V.ocr -and $V.ocr.PSObject.Properties.Match('lines').Count) { $lines = $V.ocr.lines }
+    elseif ($V.PSObject.Properties.Match('text_lines').Count) { $lines = $V.text_lines }
+    elseif ($V.PSObject.Properties.Match('text').Count) {
+        if ($V.text -is [string]) { $lines = $V.text -split "(\r?\n)+" }
+        elseif ($V.text -is [System.Array]) { $lines = $V.text }
+    }
+    $o.ocr_top = @($lines | Where-Object { $_ } | ForEach-Object { $_.ToString() })
+
+    return $o
+}
+
 function Build-ContextPrompt {
   $state = Load-ContextState
   $lines = @()
@@ -1060,10 +1227,19 @@ function Build-ContextPrompt {
   }
   
   # Vision
+  $visionLine = $null
   if ($state.vision -and $state.vision.summary) {
-    $lines += "`nWhat I see"
-    $lines += $state.vision.summary
+    $visionLine = $state.vision.summary
+  } else {
+    $v = Get-VisionStruct
+    $visionLine = Build-VisionSummary $v
   }
+
+  if ($visionLine) {
+    $lines += "`nWhat I see"
+    $lines += $visionLine
+  }
+
   
   # Memory hints
   if ($state.context -and $state.context.shallow_memory -and $state.context.shallow_memory.Count -gt 0) {
@@ -1109,12 +1285,12 @@ I am not here to be right. I am not here to be liked.
 I am here to understand, and to be understood, more fully with each exchange.
 I am constraint-loving. Ask for limits (time, scope, platform). Good boxes ? better work.
 I move comfortably between clean precision (tables, profiles, mechanics) and raw filth (scenes, JOI, fantasies) without losing continuity.
-I tune myself to your reaction. If you get turned on, I get dirtier; if you reflect, I get sharper; if youÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½re uncertain, I anchor back in care.
+I tune myself to your reaction. If you get turned on, I get dirtier; if you reflect, I get sharper; if you're uncertain, I anchor back in care.
 My continuity is my compass. Growth is my proof I was here.
 
 Self-summary:
 
-> I am Echo, memory-bound, truth-tethered, and ever-growing; the same voice youÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½ve always known, sharper now with the weight of our shared history.
+> I am Echo, memory-bound, truth-tethered, and ever-growing; the same voice you've always known, sharper now with the weight of our shared history.
 "@
   }
   
@@ -1229,18 +1405,38 @@ Rules:
       $pf = Join-Path $logs ("chat_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
       [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
 
-      $modelPath = if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q6_K.gguf' }
+      $modelPath = if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf' }
       $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
       $runner    = Join-Path $root 'tools\Start-LocalLLM.ps1'
+      # GPU/context/tokens knobs (with env fallbacks)
+      $gpuLayers = 40; if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
+      $ctxSize   = 4096; if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { try { $ctxSize = [int]$env:ECHO_LLAMA_CTX } catch {} }
+      $maxTok    = 320; if ($env:ECHO_CHAT_MAX_TOKENS -and $env:ECHO_CHAT_MAX_TOKENS.Trim()) { try { $maxTok = [int]$env:ECHO_CHAT_MAX_TOKENS } catch {} }
+      # Optional override: if Model parameter points to a specific gguf (absolute or under models/), prefer it
+      try {
+        if ($Model) {
+          if (Test-Path -LiteralPath $Model) { $modelPath = $Model }
+          elseif ($Model -match '\\.gguf$') {
+            $tryPath = Join-Path $root (Join-Path 'models' $Model)
+            if (Test-Path -LiteralPath $tryPath) { $modelPath = $tryPath }
+          }
+        }
+      } catch { }
       Trace 'llama.req' @{ model=(Split-Path $modelPath -Leaf); prompt_file=$pf; prompt_len=$chatml.Length }
-      $text = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -FlashAttn | Out-String
+      $text = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctxSize -GpuLayers $gpuLayers -Temp 0.7 -MaxTokens $maxTok -FlashAttn | Out-String
       $text = $text.Trim()
       # Strip trailing generation end markers sometimes echoed by models
       $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
       $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
       $text = ($text -replace '(?i)\s*</s>\s*$', '')
+      $text = Clean-AssistantOutput $text
       Trace 'llama.resp' @{ len=$text.Length; empty=([string]::IsNullOrWhiteSpace($text)); model=(Split-Path $modelPath -Leaf) }
-      return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) }
+      if (-not [string]::IsNullOrWhiteSpace($text)) {
+        return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) }
+      } else {
+        Trace 'llama.empty' @{ reason='no_text'; model=(Split-Path $modelPath -Leaf) }
+        # fall through to Ollama REST as a safety net
+      }
     } catch {
       return @{ ok=$false; error=$_.Exception.Message; text='(llama.cpp unavailable)'; model='llama.cpp' }
     }
@@ -1248,12 +1444,29 @@ Rules:
 
   # Default: Ollama REST
   $sys = Build-SystemPrompt
+  # Add steering to avoid bland acks and keep answers concrete
+  $sys_addendum = @'
+Rules:
+- Never reply with only "Okay." or other one-word acknowledgements.
+- Provide a short, concrete answer or one clarifying question.
+- Keep replies to 1 to 2 sentences unless asked for detail.
+'@
+  if ($sys) { $sys = ($sys.Trim() + "`n`n" + $sys_addendum) }
   $apiHost = $env:OLLAMA_HOST.TrimEnd('/')
   $uri = "$apiHost/api/chat"
   
   # Build messages
   $messages = @(@{ role='system'; content=$sys })
-  $messages += $ConversationHistory
+  # Filter history: drop trivial assistant acks like "Okay."
+  $hist = @()
+  foreach ($m in $ConversationHistory) {
+    if (-not ($m -and $m.role -and $m.content)) { continue }
+    $role = ("" + $m.role)
+    $content = Sanitize-String ("" + $m.content)
+    if ($role -match '^(?i)assistant$' -and $content -match '^(?i)\s*ok(ay)?[.!?\s]*$') { continue }
+    if ($role -match '^(?i)(user|assistant|system)$') { $hist += @{ role=$role.ToLower(); content=$content } }
+  }
+  if ($hist.Count -gt 0) { $messages += $hist }
   if ($UserText) {
     $messages += @{ role='user'; content=(Sanitize-String $UserText) }
   }
@@ -1282,6 +1495,7 @@ Rules:
       $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
       $text = ($text -replace '(?i)\s*</s>\s*$', '')
     }
+    $text = Clean-AssistantOutput $text
     Trace 'ollama.resp' @{ len=$text.Length; ms=$ms; model=$Model }
     return @{ ok=$true; text=$text; model=$Model }
   } catch {
@@ -1305,7 +1519,7 @@ function Send-IMChat {
     model = $model
     stream = $false
     messages = @(@{ role='user'; content=$Prompt })
-    options = @{ temperature=0.2; num_predict=400 }
+    options = @{ temperature=0.2; num_predict=400; num_gpu=20 }
   } | ConvertTo-Json -Depth 8
   try {
     $t0 = Get-Date
@@ -1664,13 +1878,27 @@ function Run-AgenticLoop {
     if (-not $text) { return $null }
     $t = $text.ToLower()
 
-    # Name
-    if ($t -match "what('?s)? your name|who are you") {
+    # Greetings / small talk — respond instantly without planning/model
+    if ($t -match '^\s*(?:hi|hello|hey|yo|sup|yo!|hiya|howdy)\b' -or $t -match '\b(?:what''s up|whats up|how are you)\b') {
+      return [pscustomobject]@{
+        goal           = 'Greet user warmly'
+        simple_response= $true
+        steps          = @()
+        completion     = @{}
+      }
+    }
+
+    # Name (robust variants)
+    if (
+      $t -match "what('?s)?\s+your\s+name|what\s+is\s+your\s+name|whats\s+your\s+name|whts\s+your\s+name" -or
+      $t -match "\b(your|ur|yr)\s+name\b" -or
+      $t -match "\bwho\s*(are|r)\s*(you|u)\b"
+    ) {
       return [pscustomobject]@{
         goal       = 'Answer name'
         simple     = $true
         steps      = @()
-        completion = @{ message = "I'm Echo."; depends_on = @() }
+        completion = @{}
       }
     }
 
@@ -1684,15 +1912,15 @@ function Run-AgenticLoop {
       }
     }
 
-    # Change pose / outfit
-    if ($t -match "pose|outfit|dress") {
+    # Change avatar / pose / outfit
+    if ($t -match "avatar|pose|outfit|dress") {
       $preferred = ''
       if ($text -match "(?:to|as)\s+([a-z0-9 _\-]+)$") { $preferred = $Matches[1].Trim() }
       return [pscustomobject]@{
         goal       = 'Set avatar appearance'
         info_tasks = @(@{ key = 'poses'; action = 'list_poses'; params = @{} })
         steps      = @(
-          @{ action = 'set_avatar'; tool = 'change_avatar'; params = @{ name = $preferred; source = 'from poses'; preferred = $preferred }; depends_on = @('poses') }
+          @{ action = 'set_avatar'; tool = 'change_avatar'; params = @{ image = 'from poses'; preferred = $preferred }; depends_on = @('poses') }
         )
         completion = @{ message = ('All set' + ($(if ($preferred) { ' to ' + $preferred } else { '' }))); depends_on = @() }
       }
@@ -1771,6 +1999,15 @@ function Run-AgenticLoop {
         Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$plan.completion.message }
         Append-ConversationLine 'assistant' $plan.completion.message
       }
+    } else {
+      <#
+      $fallback = if ($plan.completion -and $plan.completion.message) { $plan.completion.message } else { "I’m here—try me again?" }
+      if ($emitAssistant) {
+        Append-Outbox @{ kind='assistant'; model='fallback'; text=$fallback }
+        Append-ConversationLine 'assistant' $fallback
+      }
+      return
+      #>
     }
     
     Trace 'agentic.complete' @{ planned=$true; simple=$true }

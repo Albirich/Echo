@@ -8,8 +8,19 @@
   [double]$Temp      = 0.7,
   [switch]$FlashAttn,
   [string[]]$Images,
-  [string]$Mmproj
+  [string]$Mmproj,
+  [switch]$JsonOut
 )
+$prompt = Get-Content -LiteralPath $PromptFile -Raw
+$args = @(
+  '-m', $Model,
+  '--gpu-layers', $GpuLayers,
+  '--ctx', $Ctx,
+  '--batch', '1024',
+  '--n-predict', $MaxTokens,
+  '-p', $prompt
+)
+& $Exe @args
 
 $ErrorActionPreference = "Stop"
 $ECHO  = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { "D:\Echo" }
@@ -45,7 +56,7 @@ if (-not $Mmproj -and $env:ECHO_VISION_MMPROJ) {
 # Build args with compatibility for different llama binaries
 function Get-LlamaArgs {
   param(
-    [string]$Exe,[string]$Model,[int]$Ctx,[int]$Gpu,[int]$Max,[double]$Temperature,[string]$Prompt,[switch]$Flash,[string[]]$Imgs,[string]$Mm
+    [string]$Exe,[string]$Model,[int]$Ctx,[int]$Gpu,[int]$Max,[double]$Temperature,[string]$Prompt,[switch]$Flash,[string[]]$Imgs,[string]$Mm,[switch]$WantJson
   )
   $help = ''
   try { $help = (& $Exe -h 2>&1 | Out-String) } catch { try { $help = (& $Exe --help 2>&1 | Out-String) } catch { $help = '' } }
@@ -55,8 +66,12 @@ function Get-LlamaArgs {
   $hasNoDisplay = ($help -like '*--no-display-prompt*')
   $hasFlash = ($help -like '*--flash-attn*')
   $hasNoCnv = ($help -like '*-no-cnv*' -or $help -like '*--no-cnv*')
+  $hasGrammarJson = ($help -like '*--grammar-json*')
   $hasImage = ($help -like '*--image*' -or $help -like '*-i, --image*') -or $isMtmd
   $hasMmproj = ($help -like '*--mmproj*') -or $isMtmd
+  $hasMainGpu = ($help -like '*--main-gpu*' -or $help -like '*-mg, --main-gpu*')
+  $hasBatch = ($help -like '*--batch-size*' -or $help -like '*-b, --batch-size*' -or $help -like '*--batch *')
+  $hasUBatch = ($help -like '*--ubatch-size*' -or $help -like '*-ub, --ubatch-size*' -or $help -like '*--ubatch *')
 
   if ($isMtmd) {
     $a = @("-m", $Model, "--ctx-size", $Ctx, "--n-gpu-layers", $Gpu, "--n-predict", $Max, "--temp", $Temperature)
@@ -77,7 +92,25 @@ function Get-LlamaArgs {
     $a += @("-f", $Prompt, "-r", "<|im_end|>")
   }
   }
+  # If JSON requested, aggressively disable chat templating; fallback handled after run if unsupported
+  if ($WantJson -and -not ($a -contains '-no-cnv')) { $a += '-no-cnv' }
+  # If caller requests strict JSON and binary supports it, constrain output
+  if ($WantJson -and $hasGrammarJson) { $a += @('--grammar-json') }
   if ($Flash -and $hasFlash) { $a += @("--flash-attn") }
+  
+  # Optional perf knobs
+  try {
+    $mainGpu = 0; if ($env:ECHO_LLAMA_MAIN_GPU -and $env:ECHO_LLAMA_MAIN_GPU.Trim()) { $mainGpu = [int]$env:ECHO_LLAMA_MAIN_GPU }
+  } catch { $mainGpu = 0 }
+  try {
+    $batch = 0; if ($env:ECHO_LLAMA_BATCH -and $env:ECHO_LLAMA_BATCH.Trim()) { $batch = [int]$env:ECHO_LLAMA_BATCH }
+  } catch { $batch = 0 }
+  try {
+    $ubatch = 0; if ($env:ECHO_LLAMA_UBATCH -and $env:ECHO_LLAMA_UBATCH.Trim()) { $ubatch = [int]$env:ECHO_LLAMA_UBATCH }
+  } catch { $ubatch = 0 }
+  if ($hasMainGpu) { $a += @('--main-gpu', $mainGpu) }
+  if ($hasBatch -and $batch -gt 0) { $a += @('--batch-size', $batch) }
+  if ($hasUBatch -and $ubatch -gt 0) { $a += @('--ubatch-size', $ubatch) }
   
   # Vision: attach images and optional mmproj if supported
   if ($Imgs -and $Imgs.Count -gt 0 -and $hasImage) {
@@ -91,7 +124,7 @@ function Get-LlamaArgs {
   return ,$a
 }
 
-$args = Get-LlamaArgs -Exe $LlamaExe -Model $ModelPath -Ctx $CtxSize -Gpu $GpuLayers -Max $MaxTokens -Temperature $Temp -Prompt $PromptFile -Flash:$FlashAttn -Imgs $Images -Mm $Mmproj
+$args = Get-LlamaArgs -Exe $LlamaExe -Model $ModelPath -Ctx $CtxSize -Gpu $GpuLayers -Max $MaxTokens -Temperature $Temp -Prompt $PromptFile -Flash:$FlashAttn -Imgs $Images -Mm $Mmproj -WantJson:$JsonOut
 
 # Append threads flag if requested
 if ($llamaThreads -gt 0) {
@@ -155,6 +188,17 @@ try {
     $gen  = & $LlamaExe @args 2> $errF | Tee-Object -FilePath $logF
     $text = ($gen | Out-String)
     $exit = $LASTEXITCODE
+    # If CLI fails and -no-cnv was passed, retry once without it (older builds)
+    if ($exit -ne 0 -and ($args -contains '-no-cnv')) {
+      $args2 = @($args | Where-Object { $_ -ne '-no-cnv' })
+      if ($args2.Count -gt 0) {
+        "`n---- RETRY without -no-cnv ----`n" | Add-Content -LiteralPath $logF -Encoding UTF8
+        $gen2  = & $LlamaExe @args2 2>> $errF | Tee-Object -FilePath $logF
+        $text2 = ($gen2 | Out-String)
+        $exit2 = $LASTEXITCODE
+        if ($exit2 -eq 0 -and $text2) { $text = $text2; $exit = 0; $args = $args2 }
+      }
+    }
   } catch {
     $text = ("ERROR: {0}" -f $_.Exception.Message)
     $exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
@@ -233,10 +277,18 @@ $lines = $lines | Where-Object { -not ($_ -match '^(?:>\s*)?EOF by user' ) -and 
 $clean = ($lines -join "`n").Trim()
 
 # 7) If the remaining text still looks like instruction-only content, clear it
+#    Skip this for vision calls (images provided) or when disabled via env.
 try {
-  $low = $clean.ToLower()
-  if ($low -match '^\s*(describe the screenshot|you are describing a screenshot|write\s+\d+\D{0,3}\d+\s+short sentences|format as:|ensure all texts|avoid mentioning|no speculation)') {
-    $clean = ''
+  $skipInstrClean = $false
+  try { if ($env:ECHO_VISION_NO_INSTR_CLEAN -and ($env:ECHO_VISION_NO_INSTR_CLEAN -match '^(1|true|yes)$')) { $skipInstrClean = $true } } catch {}
+  if (-not $skipInstrClean) {
+    if ($Images -and $Images.Count -gt 0) { $skipInstrClean = $true }
+  }
+  if (-not $skipInstrClean) {
+    $low = $clean.ToLower()
+    if ($low -match '^\s*(describe the screenshot|you are describing a screenshot|write\s+\d+\D{0,3}\d+\s+short sentences|format as:|ensure all texts|avoid mentioning|no speculation)') {
+      $clean = ''
+    }
   }
 } catch {}
 

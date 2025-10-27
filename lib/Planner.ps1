@@ -91,8 +91,8 @@ Return ONLY valid JSON. No markdown, no explanations.
 
   # Append a tiny recent conversation tail to help planning
   try {
-    $home = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { try { (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } catch { (Get-Location).Path } }
-    $histPath = Join-Path $home 'state\conversation_history.jsonl'
+    $planHome = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { try { (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } catch { (Get-Location).Path } }
+    $histPath = Join-Path $planHome 'state\conversation_history.jsonl'
     if (Test-Path -LiteralPath $histPath) {
       $tail = Get-Content -LiteralPath $histPath -Encoding UTF8 | Select-Object -Last 8
       $lines = @()
@@ -163,8 +163,8 @@ PLANNING HINTS:
     # Log timing to outbox if available
     try {
       $ms = [int]((Get-Date) - $t0).TotalMilliseconds
-      $home = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { (Get-Location).Path }
-      $outbox = Join-Path $home 'ui\outbox.jsonl'
+      $planHome = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { (Get-Location).Path }
+      $outbox = Join-Path $planHome 'ui\outbox.jsonl'
       if (Test-Path -LiteralPath $outbox) {
         $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='planner.model'; data=@{ ok=[bool]$plan; ms=$ms } } | ConvertTo-Json -Depth 5 -Compress
         Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
@@ -172,13 +172,13 @@ PLANNING HINTS:
     } catch { }
 
     if ($plan) { return $plan }
-    # Fallback minimal plan to avoid full chat fallback path
-    return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{ message='Okay.' } }
+    # Fallback minimal plan: let chat model generate the reply (no canned message)
+    return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{} }
     
   } catch {
     Write-Warning "Planning failed: $($_.Exception.Message)"
-    # Fallback minimal plan to avoid chat fallback
-    return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{ message='Okay.' } }
+    # Fallback minimal plan: let chat model generate the reply (no canned message)
+    return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{} }
   }
 }
 

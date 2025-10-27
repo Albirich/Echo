@@ -1,0 +1,7 @@
+﻿<#
+  Stop-Echo.ps1 – Kill all Echo-related processes (chat, IM, UI, vision, llama daemon/cli)
+  Safe defaults: stop llama.cpp components automatically; ask before killing Ollama.
+#>
+
+param(
+  [s

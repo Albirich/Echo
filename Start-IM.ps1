@@ -19,9 +19,34 @@ param(
 # ---------- Basics & paths ----------
 function IsoNow { (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ") }
 function Ensure-Dir($p) { if (-not (Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null } }
+function Add-JsonlSafe {
+  param(
+    [Parameter(Mandatory=$true)][string]$Path,
+    [Parameter(Mandatory=$true)][string]$Line,
+    [int]$Retries = 6,
+    [int]$DelayMs = 80
+  )
+  try {
+    if ($Line -and $Line.Length -gt 0 -and [int][char]$Line[0] -eq 0xFEFF) {
+      $Line = $Line.Substring(1)
+    }
+  } catch {}
+  $attempt = 0
+  while ($attempt -le $Retries) {
+    try {
+      $sw = New-Object IO.StreamWriter($Path, $true, [Text.UTF8Encoding]::new($false))
+      try { $sw.WriteLine($Line) } finally { $sw.Dispose() }
+      return
+    } catch {
+      Start-Sleep -Milliseconds $DelayMs
+      $attempt++
+    }
+  }
+}
+
 function Append-Jsonl { param([string]$Path,[object]$Obj)
-  $line = ($Obj | ConvertTo-Json -Compress)
-  Add-Content -Path $Path -Value $line
+  $line = ($Obj | ConvertTo-Json -Compress -Depth 20)
+  Add-JsonlSafe -Path $Path -Line $line
 }
 
 # Fast-path: emit an IM ChatML prompt file for llama.cpp and exit
@@ -58,6 +83,13 @@ function Read-JsonSafe { param([string]$Path)
   if (Test-Path $Path) {
     try { return Get-Content $Path -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
   } else { return $null }
+}
+
+# Load the current vision caption (summary + visible_text)
+function Load-VisionCaption { param([string]$Path)
+  $p = if ($Path) { $Path } else { $VisionCaptionPath }
+  if (-not (Test-Path -LiteralPath $p)) { return $null }
+  try { return (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json) } catch { return $null }
 }
 
 # Load a small window of recent chat history for IM context
@@ -183,6 +215,7 @@ if (-not (Test-Path -LiteralPath $OutboxPath)) { New-Item -ItemType File -Force 
 $CtxNowPath   = Join-Path $StateDir 'context.json'
 $CtxHistPath  = Join-Path $StateDir 'context_history.jsonl'
 $VADPath      = Join-Path $StateDir 'emotion.vad.json'
+$VisionCaptionPath = Join-Path $StateDir 'screen.caption.json'
 $PrefsPath    = Join-Path $DataDir  'prefs.json'
 $EpisPath     = Join-Path $DataDir  'episodic.jsonl'
 $TodayPath    = Join-Path $DataDir  'today.json'
@@ -204,11 +237,29 @@ $IMHost = $(if ($env:IM_HOST -and $env:IM_HOST.Trim()) {
     'http://127.0.0.1:11434' 
 })
 
-$IMModel = 'dolphin-phi:2.7b'
-# Force GPU usage
-$env:OLLAMA_NUM_GPU = "999"
-Write-Host "[IM] Ollama host: $IMHost"
-Write-Host "[IM] Model: $IMModel"
+# Allow env override for Ollama IM fallback model (aligns with Start-Echo)
+$IMModel = if ($env:ECHO_IM_MODEL -and $env:ECHO_IM_MODEL.Trim()) { $env:ECHO_IM_MODEL } else { 'dolphin-phi:2.7b' }
+# Backend preference: llama.cpp only by default; set ECHO_IM_BACKEND=ollama to enable HTTP path
+$LlamaOnly = $true
+try {
+  if ($env:ECHO_IM_BACKEND -and ($env:ECHO_IM_BACKEND.Trim().ToLower() -eq 'ollama')) { $LlamaOnly = $false }
+  if ($env:ECHO_IM_USE_LLAMA_CPP -and ($env:ECHO_IM_USE_LLAMA_CPP -match '^(0|false|no)$')) { $LlamaOnly = $false }
+} catch {}
+# Force GPU usage for Ollama if enabled
+if (-not $LlamaOnly) { $env:OLLAMA_NUM_GPU = "999" }
+# Backend banner
+if ($LlamaOnly) {
+  $llmDefault = Join-Path $EchoHome 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'
+  $llmPath = $(if ($env:ECHO_IM_LLAMACPP_MODEL -and (Test-Path $env:ECHO_IM_LLAMACPP_MODEL)) { $env:ECHO_IM_LLAMACPP_MODEL } elseif ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } elseif (Test-Path $llmDefault) { $llmDefault } else { $null })
+  if ($llmPath -and (-not $env:ECHO_IM_LLAMACPP_MODEL)) { $env:ECHO_IM_LLAMACPP_MODEL = $llmPath }
+  $name = if ($llmPath) { [System.IO.Path]::GetFileName($llmPath) } else { '(unset)' }
+  Write-Host "[IM] Backend: llama.cpp"
+  Write-Host "[IM] Model: $name"
+} else {
+  Write-Host "[IM] Backend: Ollama"
+  Write-Host "[IM] Ollama host: $IMHost"
+  Write-Host "[IM] Model: $IMModel"
+}
 
 # ---------- Circuit breaker ----------
 $script:ErrorCount = 0
@@ -491,32 +542,41 @@ Return ONLY JSON array of strings:
       $pf = Join-Path $logs ("im_summarize_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
       [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
       $runner = Join-Path $EchoHome 'tools\Start-LocalLLM.ps1'
-      # Resolve model path (prefer IM-specific env, then general, else default small model under Echo/models)
-      $defaultModel = Join-Path $EchoHome 'models\model-Q3_K_M.gguf'
+      # Resolve model path (prefer IM-specific env, then general, else preferred default under Echo/models)
+      $defaultModel = Join-Path $EchoHome 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'
       $modelPath = $(if ($env:ECHO_IM_LLAMACPP_MODEL -and (Test-Path $env:ECHO_IM_LLAMACPP_MODEL)) { $env:ECHO_IM_LLAMACPP_MODEL } elseif ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { $defaultModel })
       $llamaExe  = $(if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' })
       $gpuLayers = 40; if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } catch {} } elseif ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
       $t0 = Get-Date
-      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize 4096 -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 220 -FlashAttn | Out-String
+      $env:ECHO_LLAMA_NO_CNV = '1'
+      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize 4096 -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 220 -FlashAttn -JsonOut | Out-String
       $raw = $raw.Trim()
       $raw = $raw -replace '```json\s*', '' -replace '```\s*', ''
       $raw = $raw.Trim()
-      $facts = $raw | ConvertFrom-Json
+      # Prefer strict JSON parsing; fall back to loose array extraction if needed
+      $facts = $null
+      try { $facts = $raw | ConvertFrom-Json } catch { $facts = $null }
+      if (-not $facts) { $facts = Parse-JsonArrayLoose $raw }
       try {
         $ms = [int]((Get-Date) - $t0).TotalMilliseconds
         $outbox = Join-Path $EchoHome 'ui\outbox.jsonl'
         if (Test-Path -LiteralPath $outbox) {
           $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='im.summarize'; data=@{ ok=$true; ms=$ms; backend='llama.cpp' } } | ConvertTo-Json -Compress
-          Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+          Add-JsonlSafe -Path $outbox -Line $evt
         }
       } catch { }
-      return $facts
+      if ($facts -and ($facts -is [System.Collections.IEnumerable]) -and ($facts -isnot [string]) -and ($facts.Count -gt 0)) {
+        return $facts
+      } else {
+        Log-Text $IMErrLog ("llama.cpp summarize returned empty/unparsable array; falling back to Ollama")
+      }
     } catch {
       Log-Text $IMErrLog ("IM summarize via llama.cpp failed: " + $_.Exception.Message)
       # fall through to Ollama path
     }
   }
 
+  if ($LlamaOnly) { return @() }
   $body = @{
     model = $IMModel
     stream = $false
@@ -544,7 +604,7 @@ Return ONLY JSON array of strings:
         $outbox = Join-Path $EchoHome 'ui\outbox.jsonl'
         if (Test-Path -LiteralPath $outbox) {
           $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='im.summarize'; data=@{ ok=$true; ms=$ms } } | ConvertTo-Json -Compress
-          Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+          Add-JsonlSafe -Path $outbox -Line $evt
         }
       } catch { }
       return $facts
@@ -756,13 +816,14 @@ Return ONLY JSON.
       [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
 
       $runner = Join-Path $EchoHome 'tools\Start-LocalLLM.ps1'
-      # Resolve model path for IM (small default), allow env overrides
-      $defaultModel = Join-Path $EchoHome 'models\model-Q3_K_M.gguf'
+      # Resolve model path for IM (preferred default), allow env overrides
+      $defaultModel = Join-Path $EchoHome 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'
       $modelPath = $(if ($env:ECHO_IM_LLAMACPP_MODEL -and (Test-Path $env:ECHO_IM_LLAMACPP_MODEL)) { $env:ECHO_IM_LLAMACPP_MODEL } elseif ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { $defaultModel })
       $llamaExe  = $(if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' })
       $gpuLayers = 40; if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } catch {} } elseif ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
       $t0 = Get-Date
-      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize 4096 -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 400 -FlashAttn | Out-String
+      $env:ECHO_LLAMA_NO_CNV = '1'
+      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize 4096 -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 400 -FlashAttn -JsonOut | Out-String
       $raw = $raw.Trim()
       # Remove markdown code blocks if present
       $raw = $raw -replace '```json\s*', '' -replace '```\s*', ''
@@ -779,11 +840,11 @@ Return ONLY JSON.
           $outbox = Join-Path $EchoHome 'ui\outbox.jsonl'
           if (Test-Path -LiteralPath $outbox) {
             $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='im.model'; data=@{ ok=$true; ms=$ms; backend='llama.cpp' } } | ConvertTo-Json -Compress
-            Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+            Add-JsonlSafe -Path $outbox -Line $evt
           }
         } catch { }
         $script:ErrorCount = 0
-        return $result
+        if ($result) { return $result } else { Log-Text $IMErrLog ("llama.cpp returned empty/unparsable IM; falling back to Ollama") }
       } catch {
         Log-Text $IMErrLog ("llama.cpp JSON parse fail: $raw | Error: " + $_.Exception.Message)
         # fall through to Ollama path
@@ -794,6 +855,7 @@ Return ONLY JSON.
     }
   }
 
+  if ($LlamaOnly) { return $null }
   $body = @{
     model    = $IMModel
     stream   = $false
@@ -839,7 +901,7 @@ Return ONLY JSON.
               $outbox = Join-Path $EchoHome 'ui\outbox.jsonl'
               if (Test-Path -LiteralPath $outbox) {
                 $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='im.model'; data=@{ ok=$true; ms=$ms } } | ConvertTo-Json -Compress
-                Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+                Add-JsonlSafe -Path $outbox -Line $evt
               }
             } catch { }
             return $result
@@ -862,7 +924,7 @@ Return ONLY JSON.
       $outbox = Join-Path $EchoHome 'ui\outbox.jsonl'
       if (Test-Path -LiteralPath $outbox) {
         $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='im.model'; data=@{ ok=$false; ms=$ms; error=$errMsg } } | ConvertTo-Json -Compress
-        Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+        Add-JsonlSafe -Path $outbox -Line $evt
       }
     } catch { }
 
@@ -930,6 +992,17 @@ function Write-Heartbeat {
 function Run-Tick {
   $script:_phase = 'collect'
   $tele = Collect-Telemetry
+  # Attach latest vision summary to telemetry for downstream IM prompt/context
+  try {
+    $vc = Load-VisionCaption -Path $VisionCaptionPath
+    if ($vc) {
+      $vsum = ''
+      try { if ($vc.summary) { $vsum = '' + $vc.summary } } catch {}
+      $vvis = @()
+      try { if ($vc.visible_text) { $vvis = @($vc.visible_text) } } catch {}
+      $tele | Add-Member -NotePropertyName vision -NotePropertyValue (@{ summary = $vsum; visible_text = $vvis }) -Force
+    }
+  } catch {}
   $prevVAD = Read-JsonSafe $VADPath
   $prefs   = Read-JsonSafe $PrefsPath; if (-not $prefs) { $prefs = @{} }
   $today   = Read-JsonSafe $TodayPath; if (-not $today) { $today = @{ goals = @() } }
@@ -938,6 +1011,18 @@ function Run-Tick {
   $im  = $null
   $script:_phase = 'call-im'
   try { $im = Call-IM -Tele $tele -PrevVAD $prevVAD -Prefs $prefs -Today $today } catch { $err = $_ }
+
+  # Ensure ctx object is never null to avoid stale ctx_ok=false when model output is unusable
+  if (-not $im) {
+    $im = [pscustomobject]@{
+      summary      = ''
+      tags         = @()
+      thoughts     = ''
+      affect_nudge = $null
+      suggestions  = @()
+      memory_tags  = $null
+    }
+  }
 
   # Detect stale repetition (same summary as previous while active window changed) and refresh
   try {
@@ -1045,6 +1130,7 @@ function Run-Tick {
     }
     active_window   = $tele.active_window
     idle_sec        = $tele.idle_sec
+    vision          = $(if ($tele.PSObject.Properties.Match('vision').Count -gt 0) { $tele.vision } else { $null })
     summary         = $summary
     tags            = $tags
     thoughts        = $thoughtsText

@@ -28,7 +28,7 @@ if (-not $npmCmd) {
 }
 $haveNpm = ($npmCmd -and (Test-Path $npmCmd))
 
-# 1) Start daemon if not already running
+# 1) Start daemon if not already running (hidden, no extra window)
 $daemonRunning = $false
 try {
   $procs = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'"
@@ -38,7 +38,7 @@ try {
 } catch { }
 
 if (-not $daemonRunning) {
-  Start-Process -WindowStyle Minimized -FilePath 'powershell.exe' -ArgumentList ('-NoExit -ExecutionPolicy Bypass -File "{0}"' -f $daemonPs1)
+  Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList ('-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $daemonPs1)
 }
 
 # 2) First-run deps: npm install (via cmd.exe so .cmd runs correctly)
@@ -47,17 +47,17 @@ if ($haveNpm -and -not (Test-Path (Join-Path $uiDir 'node_modules\\electron'))) 
   Start-Process -WindowStyle Minimized -FilePath $env:ComSpec -ArgumentList $args -WorkingDirectory $uiDir -Wait
 }
 
-# 3) Launch UI (always via cmd.exe + npm.cmd start)
+# 3) Launch UI (prefer hidden console)
 if ($haveNpm) {
   $args = '/c ""' + $npmCmd + '" start"'
-  Start-Process -WindowStyle Normal -FilePath $env:ComSpec -ArgumentList $args -WorkingDirectory $uiDir
+  Start-Process -WindowStyle Hidden -FilePath $env:ComSpec -ArgumentList $args -WorkingDirectory $uiDir
 } else {
   # Fallback: try npx.cmd electron .
   $npxCmd = $null
   try { $npxCmd = (Get-Command 'npx.cmd' -ErrorAction SilentlyContinue).Source } catch { }
   if ($npxCmd -and (Test-Path $npxCmd)) {
     $args = '/c ""' + $npxCmd + '" electron ."'
-    Start-Process -WindowStyle Normal -FilePath $env:ComSpec -ArgumentList $args -WorkingDirectory $uiDir
+    Start-Process -WindowStyle Hidden -FilePath $env:ComSpec -ArgumentList $args -WorkingDirectory $uiDir
   } else {
     Write-Host 'Could not find npm/npx. Install Node.js from https://nodejs.org/ and try again.'
   }

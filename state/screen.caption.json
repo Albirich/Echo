@@ -1,21 +1,21 @@
 {
     "visible_text":  [
-                         "How I Beat an Impossible, Glitched and Corrupted Randomizer - YouTube"
+                         "Echo Room"
                      ],
-    "ts":  "2025-10-19T21:55:20.6936380-04:00",
+    "ts":  "2025-10-27T06:11:47.9105664-04:00",
     "active_window":  {
-                          "title":  "(2513) How I Beat an Impossible, Glitched and Corrupted Randomizer - YouTube - Google Chrome",
-                          "exe":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-                          "process":  "chrome"
+                          "title":  "Echo Room",
+                          "exe":  "D:\\Echo\\room\\echo-room\\node_modules\\electron\\dist\\electron.exe",
+                          "process":  "electron"
                       },
     "burst":  {
-                  "first_frame":  "frame_20251019-215401-951.jpg",
+                  "first_frame":  "frame_20251027-061052-514.jpg",
                   "frame_count":  1,
                   "duration_sec":  0,
                   "fps":  0,
-                  "last_frame":  "frame_20251019-215401-951.jpg"
+                  "last_frame":  "frame_20251027-061052-514.jpg"
               },
-    "summary":  "The image captures a moment from a video game, set in a room with a stone wall and a wooden door. The room is dimly lit, adding an air of mystery to the scene. In the center of the room, a character is in action. The character, dressed in a blue and white outfit, is holding a sword and appears to be attacking a target.",
+    "summary":  "",
     "salient":  [
 
                 ]

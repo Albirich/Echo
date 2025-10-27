@@ -1,63 +1,83 @@
-<#
-  Stop-Echo.ps1 – Kill all Echo-related processes (chat, IM, UI, vision, llama daemon/cli)
-  Safe defaults: stop llama.cpp components automatically; ask before killing Ollama.
-#>
+# Stop-Echo.ps1  — PowerShell 5.1-safe
+[CmdletBinding()]
+param([switch]$Force)
 
-param(
-  [switch]$YesToAll
-)
+$ErrorActionPreference = 'SilentlyContinue'
+$here   = Split-Path -LiteralPath $PSCommandPath
+$state  = Join-Path $here 'state'
+$logs   = Join-Path $here 'logs'
 
-Write-Host "Stopping Echo stack..." -ForegroundColor Cyan
-
-# Helper to stop a list of process objects safely
-function Stop-Procs($procs, [string]$Label) {
-  foreach ($p in $procs) {
-    try {
-      Write-Host ("Killing {0} - {1}" -f $p.ProcessId, $Label) -ForegroundColor Yellow
-      Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-    } catch { }
+function Kill-PidsFromFiles($files) {
+  foreach ($f in $files) {
+    if (Test-Path -LiteralPath $f) {
+      Get-Content -LiteralPath $f | ForEach-Object {
+        if ($_ -match '^\d+$') { Stop-Process -Id [int]$_ -Force:$Force -ErrorAction SilentlyContinue }
+      }
+      Remove-Item -LiteralPath $f -Force
+    }
   }
 }
 
-# 1) Kill PowerShell processes running Echo scripts (PS 5.1 safe via WMI)
-$scriptMatches = @(
-  'Start-Echo.ps1',
-  'Start-IM.ps1',
-  'Start-EchoAll.ps1',
-  'Start-VisionProbe-Burst.ps1',
-  'Start-WhisperStreamToInbox.ps1',
-  'LlamaChatDaemon.ps1',
-  'Start-LocalLLM.ps1'
-)
-foreach ($pat in $scriptMatches) {
-  $ps = Get-WmiObject Win32_Process -Filter "name='powershell.exe'" |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like ("*{0}*" -f $pat) }
-  Stop-Procs $ps "PowerShell:$pat"
-}
+Write-Verbose "[StopEcho] Killing known child processes (from PID files)..."
+$pidFiles = @(
+  Join-Path $state 'ollama.pid'),
+  (Join-Path $state 'chat.pid'),
+  (Join-Path $state 'im.pid'),
+  (Join-Path $state 'vision.pid'),
+  (Join-Path $state 'visionprobe.pid'),
+  (Join-Path $state 'room.pid')
+Kill-PidsFromFiles $pidFiles
 
-# 2) Kill llama.cpp processes (daemon runs llama-cli per request)
-$llamaCli = Get-WmiObject Win32_Process -Filter "name='llama-cli.exe'"
-Stop-Procs $llamaCli "llama-cli.exe"
+Write-Verbose "[StopEcho] Killing common stragglers by name..."
+# llama.cpp + Ollama + helpers
+Get-Process -Name 'llama-cli','llama-mtmd-cli','ollama','ollama.exe','ollama_rocm' `
+  | Stop-Process -Force:$Force
+# whisper stream variants (whisper.cpp stream.exe or custom whisper-stream.exe)
+Get-Process -Name 'stream','stream.exe','whisper-stream','whisper-stream.exe' -ErrorAction SilentlyContinue `
+  | Stop-Process -Force:$Force
+# any powershells that were launched to run the sub-scripts directly
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" `
+  | Where-Object { $_.CommandLine -match 'Start-(EchoAll|Echo|IM|Echoroom|VisionProbe|WhisperStreamToInbox).*\.ps1' } `
+  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force:$Force }
 
-# (Optional) kill llama-server if running
-$llamaSrv = Get-WmiObject Win32_Process -Filter "name='llama-server.exe'"
-Stop-Procs $llamaSrv "llama-server.exe"
+Write-Verbose "[StopEcho] Ensuring Start-IM is terminated..."
+# Explicitly stop any shells running Start-IM (covers alternate invocations)
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" `
+  | Where-Object { $_.CommandLine -match '(?i)Start-IM(\.ps1)?(\s|"|$)' } `
+  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force:$Force }
 
-# 2b) Kill whisper-stream (external mic recognizer) if running
-$whisper = Get-WmiObject Win32_Process -Filter "name='whisper-stream.exe'"
-Stop-Procs $whisper "whisper-stream.exe"
+# If a visible console was used to run Start-IM directly, close it by title
+Get-Process | Where-Object { $_.MainWindowTitle -match '(?i)Start-IM' } `
+  | ForEach-Object { Stop-Process -Id $_.Id -Force:$Force }
 
-# 2c) Kill whisper.cpp stream (CUDA build) if running
-$stream = Get-WmiObject Win32_Process -Filter "name='stream.exe'"
-Stop-Procs $stream "stream.exe"
+Write-Verbose "[StopEcho] Closing launcher window (“Echo Room (Start)”)..."
+# 1) by exact window title
+Get-Process | Where-Object { $_.MainWindowTitle -like 'Echo Room (Start)*' } `
+  | ForEach-Object { Stop-Process -Id $_.Id -Force:$Force }
 
-# 3) Kill Electron UI (if any) – keep narrow to Electron titled Echo
-$electron = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'electron' -and $_.MainWindowTitle -like '*Echo*' }
-foreach ($p in $electron) {
-  try {
-    Write-Host ("Killing {0} - Electron UI" -f $p.Id) -ForegroundColor Yellow
-    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-  } catch { }
-}
+# 2) by command line containing Start-EchoAll.ps1 (covers renamed windows)
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" `
+  | Where-Object { $_.CommandLine -match 'Start-EchoAll\.ps1' } `
+  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force:$Force }
 
-Write-Host "`nEcho stack stopped." -ForegroundColor Green
+# 3) last-ditch: kill consoles that still have our banner
+Get-Process | Where-Object {
+  $_.MainWindowTitle -match 'Echo minimal stack launched|EchoAll'
+} | Stop-Process -Force:$Force
+
+Write-Verbose "[StopEcho] Closing Echo Room (Electron) UI..."
+# Kill Electron window by title (title set in renderer/index.html)
+Get-Process | Where-Object { $_.MainWindowTitle -like 'Echo Room*' } `
+  | ForEach-Object { Stop-Process -Id $_.Id -Force:$Force }
+
+# Kill electron.exe spawned from room/echo-room (match by command line)
+Get-CimInstance Win32_Process -Filter "Name='electron.exe' OR Name='electron'" `
+  | Where-Object { $_.CommandLine -match '(?i)room\\echo-room' -or $_.CommandLine -match '(?i)electron\s+\.' } `
+  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force:$Force }
+
+# Kill helper shells for npm/npx that launched echo-room
+Get-CimInstance Win32_Process -Filter "Name='cmd.exe' OR Name='npm.exe' OR Name='npx.exe' OR Name='node.exe'" `
+  | Where-Object { $_.CommandLine -match '(?i)room\\echo-room' -or $_.CommandLine -match '(?i)npm(\.cmd)?\s+start' -or $_.CommandLine -match '(?i)npx(\.cmd)?\s+electron\s+\.' } `
+  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force:$Force }
+
+Write-Host "[StopEcho] All Echo processes requested to stop. Close any leftover shells if they persist."

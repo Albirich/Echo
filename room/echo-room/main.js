@@ -277,11 +277,11 @@ app.whenReady().then(() => {
       fs.readSync(fd, buffer, 0, length, start);
       fs.closeSync(fd);
       tailPos = stats.size;
-      const text = buffer.toString('utf8');
+      const text = stripBOM(buffer.toString('utf8'));
       const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
       for (const l of lines) {
         try {
-          const obj = JSON.parse(l);
+          const obj = JSON.parse(stripBOM(l));
           mainWindow.webContents.send('chat:append', obj);
         } catch (e) {
           console.warn('Bad JSONL line:', e);
