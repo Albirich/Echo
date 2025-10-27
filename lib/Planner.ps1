@@ -176,8 +176,20 @@ PLANNING HINTS:
     return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{} }
     
   } catch {
-    Write-Warning "Planning failed: $($_.Exception.Message)"
-    # Fallback minimal plan: let chat model generate the reply (no canned message)
+     Write-Warning "Planning failed: $($_.Exception.Message)"
+    try {
+      # Fallback: use local llama.cpp to produce a minimal plan JSON
+      $llamaExe  = 'D:\llama-cpp\llama-cli.exe'
+      $modelPath = Join-Path $env:ECHO_HOME 'models\BRAIN_MODEL.gguf'  # set yours
+      $args = @(
+        '-m', $modelPath, '--gpu-layers','35','--ctx','4096',
+        '--n-predict','600','-p', $planningPrompt
+      )
+      $raw = & $llamaExe @args | Out-String
+      $clean = ($raw -replace '```json','' -replace '```','').Trim()
+      $plan = $clean | ConvertFrom-Json
+      if ($plan) { return $plan }
+    } catch {}
     return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{} }
   }
 }

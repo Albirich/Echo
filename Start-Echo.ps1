@@ -1328,181 +1328,203 @@ Guidance:
 # ---------------------------
 # Ollama Chat
 # ---------------------------
+$script:OllamaDownUntil = Get-Date "2000-01-01"
+
 function Send-OllamaChat {
-  param(
-    [string]$UserText,
-    [array]$ConversationHistory = @(),
-    [string]$Model = $env:ECHO_MODEL
-  )
+  param([string]$UserText,[array]$ConversationHistory,[string]$Model=$env:ECHO_MODEL)
   
-  # If llama.cpp mode, route via local runner with ChatML
-  if ($env:ECHO_USE_LLAMA_CPP -and ($env:ECHO_USE_LLAMA_CPP -match '^(1|true|yes)$')) {
-    try {
-      try { Import-Module (Join-Path $env:ECHO_HOME 'tools\PromptBuilder.psm1') -Force -DisableNameChecking } catch { }
-      $sys = Build-SystemPrompt
-      # Steering: forbid empty acknowledgements; encourage concise, concrete replies
-      $sys_addendum = @'
+  if (Get-Date -lt $script:OllamaDownUntil) { return Use-LocalLlama -UserText $UserText -ConversationHistory $ConversationHistory }
+
+  try {
+    # If llama.cpp mode, route via local runner with ChatML
+    if ($env:ECHO_USE_LLAMA_CPP -and ($env:ECHO_USE_LLAMA_CPP -match '^(1|true|yes)$')) {
+      try {
+        try { Import-Module (Join-Path $env:ECHO_HOME 'tools\PromptBuilder.psm1') -Force -DisableNameChecking } catch { }
+        $sys = Build-SystemPrompt
+        # Steering: forbid empty acknowledgements; encourage concise, concrete replies
+        $sys_addendum = @'
 Rules:
 - Never reply with only "Okay." or other one-word acknowledgements.
 - Provide a short, concrete answer or one clarifying question.
 - Keep replies to 1 to 2 sentences unless asked for detail.
 '@
-      if ($sys) { $sys = ($sys.Trim() + "`n`n" + $sys_addendum) }
+        if ($sys) { $sys = ($sys.Trim() + "`n`n" + $sys_addendum) }
 
-      # Helper: sanitize any prior messages that accidentally contained logs
-      function Clean-ForChat([string]$t,[int]$max=1200) {
-        if (-not $t) { return '' }
-        $t2 = ($t -replace "\r\n?","`n")
-        $lines = $t2 -split "`n"
-        $lines = $lines | Where-Object {
-          $_ -and -not (
-            $_ -match '^==== llama\.cpp RUN' -or
-            $_ -match '^(Saved ->|Log ->)' -or
-            $_ -match '^(llama-|llama_|llama_context:|llama_kv_cache:|llama_perf_|load_backend:|ggml_|print_info:|load_tensors:|system_info:|sampler|generate:|common_init_from_params:|load:)' -or
-            $_ -match '^Args:'
-          )
+        # Helper: sanitize any prior messages that accidentally contained logs
+        function Clean-ForChat([string]$t,[int]$max=1200) {
+          if (-not $t) { return '' }
+          $t2 = ($t -replace "\r\n?","`n")
+          $lines = $t2 -split "`n"
+          $lines = $lines | Where-Object {
+            $_ -and -not (
+              $_ -match '^==== llama\.cpp RUN' -or
+              $_ -match '^(Saved ->|Log ->)' -or
+              $_ -match '^(llama-|llama_|llama_context:|llama_kv_cache:|llama_perf_|load_backend:|ggml_|print_info:|load_tensors:|system_info:|sampler|generate:|common_init_from_params:|load:)' -or
+              $_ -match '^Args:'
+            )
+          }
+          $s = ($lines -join "`n").Trim()
+          if ($s.Length -gt $max) { $s = $s.Substring(0,$max) }
+          return $s
         }
-        $s = ($lines -join "`n").Trim()
-        if ($s.Length -gt $max) { $s = $s.Substring(0,$max) }
-        return $s
-      }
 
-      $parts = @()
-      $preludeMode = ($sys -and ($sys.TrimStart() -like '<|im_start|>*'))
-      if ($preludeMode) {
-        # Treat system prompt as full ChatML prelude
-        $parts += $sys.Trim()
-      } else {
-        if ($sys) { $parts += "<|im_start|>system`n$sys<|im_end|>" }
-        # Few-shot nudge to avoid bland acks (only when not using a prelude)
-        $parts += "<|im_start|>user`nping<|im_end|>"
-        $parts += "<|im_start|>assistant`nPong!<|im_end|>"
-      }
-
-      # Filter history: drop trivial assistant acks like "Okay."
-      $hist = @()
-      foreach ($m in $ConversationHistory) {
-        if (-not ($m -and $m.role -and $m.content)) { continue }
-        $role = ($m.role -as [string]).ToLower()
-        $content = Clean-ForChat ([string]$m.content) 1000
-        $isAck = ($role -eq 'assistant' -and ($content -match '^(?i)\s*ok(ay)?[.!?\s]*$'))
-        if ($isAck) { continue }
-        if ($role -eq 'user' -or $role -eq 'assistant' -or $role -eq 'system') {
-          $hist += @{ role=$role; content=$content }
+        $parts = @()
+        $preludeMode = ($sys -and ($sys.TrimStart() -like '<|im_start|>*'))
+        if ($preludeMode) {
+          # Treat system prompt as full ChatML prelude
+          $parts += $sys.Trim()
+        } else {
+          if ($sys) { $parts += "<|im_start|>system`n$sys<|im_end|>" }
+          # Few-shot nudge to avoid bland acks (only when not using a prelude)
+          $parts += "<|im_start|>user`nping<|im_end|>"
+          $parts += "<|im_start|>assistant`nPong!<|im_end|>"
         }
-      }
-      # Keep only the last few cleaned turns to respect ctx
-      if ($hist.Count -gt 8) { $hist = $hist[-8..-1] }
-      foreach ($h in $hist) {
-        $parts += ("<|im_start|>{0}`n{1}<|im_end|>" -f $h.role, $h.content)
-      }
-      if ($UserText) { $parts += ("<|im_start|>user`n{0}<|im_end|>" -f (Clean-ForChat $UserText 800)) }
-      $parts += "<|im_start|>assistant`n"
-      $chatml = ($parts -join "`n")
 
-      $root = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-      $logs = Join-Path $root 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
-      $pf = Join-Path $logs ("chat_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
-      [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
-
-      $modelPath = if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf' }
-      $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
-      $runner    = Join-Path $root 'tools\Start-LocalLLM.ps1'
-      # GPU/context/tokens knobs (with env fallbacks)
-      $gpuLayers = 40; if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
-      $ctxSize   = 4096; if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { try { $ctxSize = [int]$env:ECHO_LLAMA_CTX } catch {} }
-      $maxTok    = 320; if ($env:ECHO_CHAT_MAX_TOKENS -and $env:ECHO_CHAT_MAX_TOKENS.Trim()) { try { $maxTok = [int]$env:ECHO_CHAT_MAX_TOKENS } catch {} }
-      # Optional override: if Model parameter points to a specific gguf (absolute or under models/), prefer it
-      try {
-        if ($Model) {
-          if (Test-Path -LiteralPath $Model) { $modelPath = $Model }
-          elseif ($Model -match '\\.gguf$') {
-            $tryPath = Join-Path $root (Join-Path 'models' $Model)
-            if (Test-Path -LiteralPath $tryPath) { $modelPath = $tryPath }
+        # Filter history: drop trivial assistant acks like "Okay."
+        $hist = @()
+        foreach ($m in $ConversationHistory) {
+          if (-not ($m -and $m.role -and $m.content)) { continue }
+          $role = ($m.role -as [string]).ToLower()
+          $content = Clean-ForChat ([string]$m.content) 1000
+          $isAck = ($role -eq 'assistant' -and ($content -match '^(?i)\s*ok(ay)?[.!?\s]*$'))
+          if ($isAck) { continue }
+          if ($role -eq 'user' -or $role -eq 'assistant' -or $role -eq 'system') {
+            $hist += @{ role=$role; content=$content }
           }
         }
-      } catch { }
-      Trace 'llama.req' @{ model=(Split-Path $modelPath -Leaf); prompt_file=$pf; prompt_len=$chatml.Length }
-      $text = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctxSize -GpuLayers $gpuLayers -Temp 0.7 -MaxTokens $maxTok -FlashAttn | Out-String
-      $text = $text.Trim()
-      # Strip trailing generation end markers sometimes echoed by models
-      $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
-      $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
-      $text = ($text -replace '(?i)\s*</s>\s*$', '')
-      $text = Clean-AssistantOutput $text
-      Trace 'llama.resp' @{ len=$text.Length; empty=([string]::IsNullOrWhiteSpace($text)); model=(Split-Path $modelPath -Leaf) }
-      if (-not [string]::IsNullOrWhiteSpace($text)) {
-        return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) }
-      } else {
-        Trace 'llama.empty' @{ reason='no_text'; model=(Split-Path $modelPath -Leaf) }
-        # fall through to Ollama REST as a safety net
-      }
-    } catch {
-      return @{ ok=$false; error=$_.Exception.Message; text='(llama.cpp unavailable)'; model='llama.cpp' }
-    }
-  }
+        # Keep only the last few cleaned turns to respect ctx
+        if ($hist.Count -gt 8) { $hist = $hist[-8..-1] }
+        foreach ($h in $hist) {
+          $parts += ("<|im_start|>{0}`n{1}<|im_end|>" -f $h.role, $h.content)
+        }
+        if ($UserText) { $parts += ("<|im_start|>user`n{0}<|im_end|>" -f (Clean-ForChat $UserText 800)) }
+        $parts += "<|im_start|>assistant`n"
+        $chatml = ($parts -join "`n")
 
-  # Default: Ollama REST
-  $sys = Build-SystemPrompt
-  # Add steering to avoid bland acks and keep answers concrete
-  $sys_addendum = @'
+        $root = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+        $logs = Join-Path $root 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
+        $pf = Join-Path $logs ("chat_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
+        [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
+
+        $modelPath = if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf' }
+        $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
+        $runner    = Join-Path $root 'tools\Start-LocalLLM.ps1'
+        # GPU/context/tokens knobs (with env fallbacks)
+        $gpuLayers = 40; if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
+        $ctxSize   = 4096; if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { try { $ctxSize = [int]$env:ECHO_LLAMA_CTX } catch {} }
+        $maxTok    = 320; if ($env:ECHO_CHAT_MAX_TOKENS -and $env:ECHO_CHAT_MAX_TOKENS.Trim()) { try { $maxTok = [int]$env:ECHO_CHAT_MAX_TOKENS } catch {} }
+        # Optional override: if Model parameter points to a specific gguf (absolute or under models/), prefer it
+        try {
+          if ($Model) {
+            if (Test-Path -LiteralPath $Model) { $modelPath = $Model }
+            elseif ($Model -match '\\.gguf$') {
+              $tryPath = Join-Path $root (Join-Path 'models' $Model)
+              if (Test-Path -LiteralPath $tryPath) { $modelPath = $tryPath }
+            }
+          }
+        } catch { }
+        Trace 'llama.req' @{ model=(Split-Path $modelPath -Leaf); prompt_file=$pf; prompt_len=$chatml.Length }
+        $text = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctxSize -GpuLayers $gpuLayers -Temp 0.7 -MaxTokens $maxTok -FlashAttn | Out-String
+        $text = $text.Trim()
+        # Strip trailing generation end markers sometimes echoed by models
+        $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
+        $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
+        $text = ($text -replace '(?i)\s*</s>\s*$', '')
+        $text = Clean-AssistantOutput $text
+        Trace 'llama.resp' @{ len=$text.Length; empty=([string]::IsNullOrWhiteSpace($text)); model=(Split-Path $modelPath -Leaf) }
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+          return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) }
+        } else {
+          Trace 'llama.empty' @{ reason='no_text'; model=(Split-Path $modelPath -Leaf) }
+          # fall through to Ollama REST as a safety net
+        }
+      } catch {
+        return @{ ok=$false; error=$_.Exception.Message; text='(llama.cpp unavailable)'; model='llama.cpp' }
+      }
+    }  
+
+    # Default: Ollama REST
+    $sys = Build-SystemPrompt
+    # Add steering to avoid bland acks and keep answers concrete
+    $sys_addendum = @'
 Rules:
 - Never reply with only "Okay." or other one-word acknowledgements.
 - Provide a short, concrete answer or one clarifying question.
 - Keep replies to 1 to 2 sentences unless asked for detail.
 '@
-  if ($sys) { $sys = ($sys.Trim() + "`n`n" + $sys_addendum) }
-  $apiHost = $env:OLLAMA_HOST.TrimEnd('/')
-  $uri = "$apiHost/api/chat"
-  
-  # Build messages
-  $messages = @(@{ role='system'; content=$sys })
-  # Filter history: drop trivial assistant acks like "Okay."
-  $hist = @()
-  foreach ($m in $ConversationHistory) {
-    if (-not ($m -and $m.role -and $m.content)) { continue }
-    $role = ("" + $m.role)
-    $content = Sanitize-String ("" + $m.content)
-    if ($role -match '^(?i)assistant$' -and $content -match '^(?i)\s*ok(ay)?[.!?\s]*$') { continue }
-    if ($role -match '^(?i)(user|assistant|system)$') { $hist += @{ role=$role.ToLower(); content=$content } }
-  }
-  if ($hist.Count -gt 0) { $messages += $hist }
-  if ($UserText) {
-    $messages += @{ role='user'; content=(Sanitize-String $UserText) }
-  }
-  
-  $body = @{
-    model = $Model
-    stream = $false
-    messages = $messages
-  }
-  
-  try {
-    $json = $body | ConvertTo-Json -Depth 20 -Compress
-    $t0 = Get-Date
-    Trace 'ollama.req' @{ model=$Model; msgCount=$messages.Count }
+    if ($sys) { $sys = ($sys.Trim() + "`n`n" + $sys_addendum) }
+    $apiHost = $env:OLLAMA_HOST.TrimEnd('/')
+    $uri = "$apiHost/api/chat"
     
-    $resp = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $json -TimeoutSec 90 -ErrorAction Stop
+    # Build messages
+    $messages = @(@{ role='system'; content=$sys })
+    # Filter history: drop trivial assistant acks like "Okay."
+    $hist = @()
+    foreach ($m in $ConversationHistory) {
+      if (-not ($m -and $m.role -and $m.content)) { continue }
+      $role = ("" + $m.role)
+      $content = Sanitize-String ("" + $m.content)
+      if ($role -match '^(?i)assistant$' -and $content -match '^(?i)\s*ok(ay)?[.!?\s]*$') { continue }
+      if ($role -match '^(?i)(user|assistant|system)$') { $hist += @{ role=$role.ToLower(); content=$content } }
+    }
+    if ($hist.Count -gt 0) { $messages += $hist }
+    if ($UserText) {
+      $messages += @{ role='user'; content=(Sanitize-String $UserText) }
+    }
     
-    $text = ''
-    if ($resp -and $resp.message -and $resp.message.content) {
-      $text = [string]$resp.message.content
+    $body = @{
+      model = $Model
+      stream = $false
+      messages = $messages
     }
-    $ms = [int]((Get-Date) - $t0).TotalMilliseconds
-    # Sanitize common stop markers
-    if ($text) {
-      $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
-      $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
-      $text = ($text -replace '(?i)\s*</s>\s*$', '')
+    
+    try {
+      $json = $body | ConvertTo-Json -Depth 20 -Compress
+      $t0 = Get-Date
+      Trace 'ollama.req' @{ model=$Model; msgCount=$messages.Count }
+      
+      $resp = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $json -TimeoutSec 90 -ErrorAction Stop
+      
+      $text = ''
+      if ($resp -and $resp.message -and $resp.message.content) {
+        $text = [string]$resp.message.content
+      }
+      $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+      # Sanitize common stop markers
+      if ($text) {
+        $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
+        $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
+        $text = ($text -replace '(?i)\s*</s>\s*$', '')
+      }
+      $text = Clean-AssistantOutput $text
+      Trace 'ollama.resp' @{ len=$text.Length; ms=$ms; model=$Model }
+      return @{ ok=$true; text=$text; model=$Model }
+    } catch {
+      $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+      Trace 'ollama.err' @{ error=$_.Exception.Message; ms=$ms; model=$Model }
+      return @{ ok=$false; error=$_.Exception.Message; text='(Ollama unavailable)'; model=$Model }
     }
-    $text = Clean-AssistantOutput $text
-    Trace 'ollama.resp' @{ len=$text.Length; ms=$ms; model=$Model }
-    return @{ ok=$true; text=$text; model=$Model }
   } catch {
-    $ms = [int]((Get-Date) - $t0).TotalMilliseconds
-    Trace 'ollama.err' @{ error=$_.Exception.Message; ms=$ms; model=$Model }
-    return @{ ok=$false; error=$_.Exception.Message; text='(Ollama unavailable)'; model=$Model }
-  }
+    # mark down for 2 minutes
+    $script:OllamaDownUntil = (Get-Date).AddMinutes(2)
+    try { return Use-LocalLlama -UserText $UserText -ConversationHistory $ConversationHistory } catch {}
+    return @{ ok=$false; error=$_.Exception.Message }
+  } 
+}
+
+function Use-LocalLlama {
+  param([string]$UserText,[array]$ConversationHistory)
+  $llamaExe  = 'D:\llama-cpp\llama-cli.exe'
+  $modelPath = Join-Path $env:ECHO_HOME 'models\BRAIN_MODEL.gguf'  # set yours
+  # Build a tiny ChatML from history + user text (you already have similar code)
+  $chatml = "<|im_start|>system`n" + (Build-SystemPrompt) + "<|im_end|>`n"
+  foreach ($m in $ConversationHistory) { if ($m.role -and $m.content) { $chatml += "<|im_start|>$($m.role)`n$($m.content)<|im_end|>`n" } }
+  $chatml += "<|im_start|>user`n$UserText<|im_end|>`n<|im_start|>assistant`n"
+
+  $args = @('-m',$modelPath,'--gpu-layers','35','--ctx','4096','--n-predict','320','-p',$chatml)
+  $out = & $llamaExe @args | Out-String
+  $text = ($out -replace '(?i)\s*\[end of text\]\s*$','' -replace '(?i)\s*<\|im_end\|>\s*$','' -replace '(?i)\s*</s>\s*$','').Trim()
+  return @{ ok=$true; text=$text; model='llama.cpp' }
 }
 
 # ---------------------------

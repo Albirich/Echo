@@ -7,12 +7,21 @@ room/echo-room/node_modules/
 
 # local data & models
 data/
+# heavy local stuff — keep out of git
 models/
-*.onnx
-*.bin
-*.pt
+sense/screenshots/
 *.gguf
-*.ckpt
+*.pt
+*.onnx
+*.safetensors
+*.bin
+*.exe
+*.dll
+*.7z
+*.zip
+*.mp4
+*.wav
+*.log
 
 # logs / state / caches
 logs/

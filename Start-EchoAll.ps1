@@ -81,8 +81,8 @@ Write-Host "[EchoAll] Launching minimal Echo stack..."
 # --- Minimal Ollama ensure + warmup for qwen2.5vl:3b ---
 function Test-OllamaReachable { param([int]$TimeoutSec=2)
   try {
-    $host = if ($env:OLLAMA_HOST -and $env:OLLAMA_HOST.Trim()) { $env:OLLAMA_HOST.TrimEnd('/') } else { 'http://127.0.0.1:11434' }
-    $uri  = $host + '/api/tags'
+    $ollamaHost = if ($env:OLLAMA_HOST -and $env:OLLAMA_HOST.Trim()) { $env:OLLAMA_HOST.TrimEnd('/') } else { 'http://127.0.0.1:11434' }
+    $uri  = $ollamaHost + '/api/tags'
     Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec $TimeoutSec | Out-Null
     return $true
   } catch { return $false }
