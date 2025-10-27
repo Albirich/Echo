@@ -123,6 +123,28 @@ function Append-ConversationLine([string]$Role, [string]$Text) {
   } catch { }
 }
 
+function Emit-AssistantBackup {
+  param(
+    [Parameter(Mandatory)][string]$Reason,
+    [string]$Detail
+  )
+  try {
+    $map = @{
+      'planner.null'    = "My planner couldn't produce a plan."
+      'planner.invalid' = "My plan didn't validate."
+      'chat.error'      = "I couldn't reach my chat model."
+      'chat.empty'      = "My chat model returned nothing."
+      'llama.empty'     = "My local model returned nothing."
+      'tools.error'     = "A tool call failed."
+    }
+    $base = if ($map.ContainsKey($Reason)) { $map[$Reason] } else { 'Something went wrong.' }
+    $text = if ($Detail -and $Detail.Trim()) { ($base + ' (' + $Detail + ')') } else { $base }
+    Trace 'agentic.backup' @{ reason=$Reason; detail=$Detail }
+    Append-Outbox @{ kind='assistant'; model='fallback'; text=$text }
+    Append-ConversationLine 'assistant' $text
+  } catch { }
+}
+
 function Load-ConversationHistory([int]$Max = 10) {
   $path = Join-Path $STATE_DIR 'conversation_history.jsonl'
   $messages = @()
@@ -1981,13 +2003,17 @@ function Run-AgenticLoop {
     # Fallback to simple response
     $hist = Load-ConversationHistory -Max 12
     $resp = Send-OllamaChat -UserText $InitialMessage -ConversationHistory $hist
-    if ($resp.ok) {
+    if ($resp.ok -and $resp.text) {
       if (-not (Handle-ChatToolCall -Text $resp.text)) {
         if ($emitAssistant) {
           Append-Outbox @{ kind='assistant'; model=$resp.model; text=$resp.text }
           Append-ConversationLine 'assistant' $resp.text
         }
       }
+    } elseif ($emitAssistant) {
+      Emit-AssistantBackup -Reason 'planner.null' -Detail ($resp.error)
+    } elseif ($emitAssistant) {
+      Emit-AssistantBackup -Reason 'planner.invalid' -Detail ($resp.error)
     }
     return
   }
@@ -2030,6 +2056,8 @@ function Run-AgenticLoop {
       }
       return
       #>
+      if ($emitAssistant) { Emit-AssistantBackup -Reason 'chat.empty' -Detail '' }
+      return
     }
     
     Trace 'agentic.complete' @{ planned=$true; simple=$true }
@@ -2053,6 +2081,9 @@ function Run-AgenticLoop {
         Append-Outbox @{ kind='assistant'; model=$env:ECHO_MODEL; text=$plan.completion.message }
         Append-ConversationLine 'assistant' $plan.completion.message
       }
+    } else {
+      if ($emitAssistant) { Emit-AssistantBackup -Reason 'chat.empty' -Detail '' }
+      return
     }
     
     Trace 'agentic.complete' @{ planned=$true; simple=$true }

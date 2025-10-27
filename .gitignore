@@ -1,13 +1,4 @@
-﻿# node / electron
-**/node_modules/
-room/echo-room/node_modules/
-**/dist/
-**/out/
-
-
-# local data & models
-data/
-# heavy local stuff — keep out of git
+﻿# keep heavy/local stuff out of git
 models/
 sense/screenshots/
 *.gguf
@@ -22,14 +13,3 @@ sense/screenshots/
 *.mp4
 *.wav
 *.log
-
-# logs / state / caches
-logs/
-state/cursors/
-ui/outbox.jsonl
-*.log
-
-# OS / IDE
-.DS_Store
-Thumbs.db
-.vscode/
