@@ -1,0 +1,62 @@
+﻿{"ts":"2025-10-28T02:45:00.5257108-04:00","channel":"trace","data":{"len":18,"isIM":false},"stage":"inbox.recv","kind":"system"}
+
+{"ts":"2025-10-28T02:45:00.7114627-04:00","channel":"trace","data":{"request_len":18},"stage":"agentic.planning","kind":"system"}
+
+{"ts":"2025-10-28T02:45:00.7244686-04:00","channel":"trace","data":{"goal":"Answer name"},"stage":"agentic.simple","kind":"system"}
+
+{"ts":"2025-10-28T02:45:00.9166167-04:00","channel":"trace","data":{"error":"The term \u0027Build-VisionSummary\u0027 is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again."},"stage":"simple.chat.err","kind":"system"}
+
+{"ts":"2025-10-28T02:45:00.9426167-04:00","channel":"trace","data":{"detail":"","reason":"chat.empty"},"stage":"agentic.backup","kind":"system"}
+
+{"ts":"2025-10-28T02:45:11.8293227-04:00","channel":"trace","data":{"len":28,"isIM":false},"stage":"inbox.recv","kind":"system"}
+
+{"ts":"2025-10-28T02:45:11.8593460-04:00","channel":"trace","data":{"request_len":28},"stage":"agentic.planning","kind":"system"}
+
+{"ts":"2025-10-28T02:47:30.7660212-04:00","channel":"trace","data":{"reason":"im.needs","mode":"plan"},"stage":"agentic.route","kind":"system"}
+
+{"ts":"2025-10-28T02:47:34.6770497-04:00","channel":"trace","data":{"goal":"Respond conversationally"},"stage":"agentic.simple","kind":"system"}
+
+{"ts":"2025-10-28T02:47:34.7640546-04:00","channel":"trace","data":{"error":"The term \u0027Build-VisionSummary\u0027 is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again."},"stage":"simple.chat.err","kind":"system"}
+
+{"ts":"2025-10-28T02:47:34.7690501-04:00","channel":"trace","data":{"detail":"","reason":"chat.empty"},"stage":"agentic.backup","kind":"system"}
+
+{"ts":"2025-10-28T02:54:56.2284343-04:00","channel":"trace","data":{"len":18,"isIM":false},"stage":"inbox.recv","kind":"system"}
+
+{"ts":"2025-10-28T02:54:56.4476464-04:00","channel":"trace","data":{"request_len":18},"stage":"agentic.planning","kind":"system"}
+
+{"ts":"2025-10-28T02:54:56.4856470-04:00","channel":"trace","data":{"goal":"Answer name"},"stage":"agentic.simple","kind":"system"}
+
+{"ts":"2025-10-28T02:54:56.6506488-04:00","channel":"trace","data":{"model":"athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf","prompt_file":"D:\\Echo\\logs\\simple_2025-10-28_02-54-56.txt"},"stage":"simple.chat.req","kind":"system"}
+
+{"ts":"2025-10-28T02:57:35.7747225-04:00","channel":"trace","data":{"empty":false,"prompt":"D:\\Echo\\logs\\simple_2025-10-28_02-54-56.txt","log":"D:\\Echo\\logs\\llama-2025-10-28_02-54-56_981-38496.log","len":216},"stage":"simple.chat.resp","kind":"system"}
+
+{"ts":"2025-10-28T02:57:35.8377251-04:00","channel":"trace","data":{"simple":true,"planned":true},"stage":"agentic.complete","kind":"system"}
+
+{"ts":"2025-10-28T02:58:20.9290244-04:00","channel":"trace","data":{"len":26,"isIM":false},"stage":"inbox.recv","kind":"system"}
+
+{"ts":"2025-10-28T02:58:20.9430273-04:00","channel":"trace","data":{"request_len":26},"stage":"agentic.planning","kind":"system"}
+
+{"ts":"2025-10-28T02:59:54.7915858-04:00","channel":"trace","data":{"reason":"im.needs","mode":"convo"},"stage":"agentic.route","kind":"system"}
+
+{"ts":"2025-10-28T02:59:55.1115879-04:00","channel":"trace","data":{"detail":"","reason":"chat.empty"},"stage":"agentic.backup","kind":"system"}
+
+{"ts":"2025-10-28T02:59:55.3035894-04:00","channel":"trace","data":{"simple":true,"planned":false},"stage":"agentic.complete","kind":"system"}
+
+{"ts":"2025-10-28T03:00:38.9596023-04:00","channel":"trace","data":{"len":26,"isIM":false},"stage":"inbox.recv","kind":"system"}
+
+{"ts":"2025-10-28T03:00:38.9746053-04:00","channel":"trace","data":{"request_len":26},"stage":"agentic.planning","kind":"system"}
+
+{"ts":"2025-10-28T03:02:29.1421615-04:00","channel":"trace","data":{"reason":"im.needs","mode":"convo"},"stage":"agentic.route","kind":"system"}
+
+{"ts":"2025-10-28T03:02:29.3221633-04:00","channel":"trace","data":{"detail":"","reason":"chat.empty"},"stage":"agentic.backup","kind":"system"}
+
+{"ts":"2025-10-28T03:02:29.3271624-04:00","channel":"trace","data":{"simple":true,"planned":false},"stage":"agentic.complete","kind":"system"}
+
+{"ts":"2025-10-28T03:02:45.2797011-04:00","channel":"trace","data":{"len":20,"isIM":false},"stage":"inbox.recv","kind":"system"}
+
+{"ts":"2025-10-28T03:02:45.2987840-04:00","channel":"trace","data":{"request_len":20},"stage":"agentic.planning","kind":"system"}
+
+{"ts":"2025-10-28T03:02:45.3078491-04:00","channel":"trace","data":{"goal":"Greet user warmly"},"stage":"agentic.simple","kind":"system"}
+
+{"ts":"2025-10-28T03:02:45.3549330-04:00","channel":"trace","data":{"model":"athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf","prompt_file":"D:\\Echo\\logs\\simple_2025-10-28_03-02-45.txt"},"stage":"simple.chat.req","kind":"system"}
+

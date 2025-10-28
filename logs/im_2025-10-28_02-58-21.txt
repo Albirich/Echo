@@ -1,0 +1,28 @@
+<|im_start|>system
+Return ONLY compact JSON according to the user's instructions. No markdown. No commentary. If you are unsure, return an empty JSON object {}.<|im_end|>
+<|im_start|>user
+Decide routing for Echo. Return ONLY JSON.
+
+USER: whats your favorite color?
+
+STATE:
+valence=0 arousal=0.769 dominance=1
+recent=""
+
+Rules:
+- If the user is greeting/small talk or asking a simple question, prefer conversation (no tools/plan).
+- Only request a plan when tools or multi-step actions are clearly needed.
+- Suggest any memory_tags or preference_keys that would help either path.
+
+Return exactly this shape (omit fields you don't know):
+{
+  "goal": "one sentence goal",
+  "mode": "convo" | "plan",
+  "needs_plan": true|false,
+  "memory_tags": ["tag1","tag2"],
+  "preference_keys": ["key1","key2"],
+  "keywords": ["word1","word2"],
+  "questions": ["clarifying question 1"],
+  "confidence": 0.0
+}<|im_end|>
+<|im_start|>assistant

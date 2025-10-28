@@ -11,17 +11,6 @@
   [string]$Mmproj,
   [switch]$JsonOut
 )
-$prompt = Get-Content -LiteralPath $PromptFile -Raw
-$args = @(
-  '-m', $Model,
-  '--gpu-layers', $GpuLayers,
-  '--ctx', $Ctx,
-  '--batch', '1024',
-  '--n-predict', $MaxTokens,
-  '-p', $prompt
-)
-& $Exe @args
-
 $ErrorActionPreference = "Stop"
 $ECHO  = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { "D:\Echo" }
 $Logs  = Join-Path $ECHO "logs"; New-Item -ItemType Directory -Force -Path $Logs | Out-Null
@@ -281,6 +270,7 @@ $clean = ($lines -join "`n").Trim()
 try {
   $skipInstrClean = $false
   try { if ($env:ECHO_VISION_NO_INSTR_CLEAN -and ($env:ECHO_VISION_NO_INSTR_CLEAN -match '^(1|true|yes)$')) { $skipInstrClean = $true } } catch {}
+  try { if ($env:ECHO_CHAT_NO_INSTR_CLEAN -and ($env:ECHO_CHAT_NO_INSTR_CLEAN -match '^(1|true|yes)$')) { $skipInstrClean = $true } } catch {}
   if (-not $skipInstrClean) {
     if ($Images -and $Images.Count -gt 0) { $skipInstrClean = $true }
   }
@@ -318,6 +308,14 @@ try {
              else { 'unknown' }
   $rec.gpu_backend = $backend
   $rec.gpu_used = ($backend -ne 'cpu' -and $backend -ne 'unknown')
+  # Also include a small tail of the raw stdout/stderr log for debugging when text is empty
+  try {
+    if ($runOut) {
+      $tail = $runOut
+      if ($tail.Length -gt 1200) { $tail = $tail.Substring([Math]::Max(0, $tail.Length-1200)) }
+      $rec.stdout_tail = $tail
+    }
+  } catch {}
 } catch { }
 function Add-JsonlSafe([string]$Path,[string]$Line,[int]$Retries=3){
   # Ensure no BOM at line start
@@ -339,7 +337,11 @@ function Add-JsonlSafe([string]$Path,[string]$Line,[int]$Retries=3){
 $line = ($rec | ConvertTo-Json -Compress -Depth 5)
 Add-JsonlSafe -Path $Outbx -Line $line
 
-# Do not print anything except the cleaned model text to STDOUT
+# Persist a debug snapshot for callers to inspect (non-STDOUT)
+try {
+  $dbgDir = Join-Path $ECHO 'debug'; if (-not (Test-Path $dbgDir)) { New-Item -ItemType Directory -Force -Path $dbgDir | Out-Null }
+  [IO.File]::WriteAllText((Join-Path $dbgDir 'last-llama.json'), ($rec | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+} catch {}
 
-# Also emit the generated text on STDOUT for callers that capture output
+# Do not print anything except the cleaned model text to STDOUT; emit the generated text for callers
 Write-Output $clean

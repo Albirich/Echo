@@ -28,6 +28,7 @@ param(
 # ------------------ Config ------------------
 $ErrorActionPreference = 'Continue'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+$env:ECHO_VISION_OLLAMA_MODEL = 'qwen2.5vl:3b:gpu'
 
 $HomeDir       = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { 'D:\Echo' }
 $StateDir      = if ($env:STATE_DIR -and $env:STATE_DIR.Trim()) { $env:STATE_DIR } else { Join-Path $HomeDir 'state' }

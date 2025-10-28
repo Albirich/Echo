@@ -21,6 +21,7 @@ DECISION TREE:
 1. Is this a greeting/small talk? → Simple response, no tools needed
 2. Does this require tools (notes, avatar changes, memory, files)? → Create detailed plan
 3. Is this a question/conversation? → Simple response, no tools needed
+4. Think freely about what memory tags or preference keys would be useful — even if they don’t exist yet. Echo will handle missing data gracefully.
 
 OUTPUT FORMAT:
 
@@ -28,7 +29,6 @@ For greetings/conversation (no tools needed):
 {
   "goal": "Respond conversationally",
   "simple_response": true,
-  "completion": {"message": "[Your natural response based on emotional state]"}
 }
 
 For tool-based requests:
@@ -40,7 +40,6 @@ For tool-based requests:
   "steps": [
     {"action": "step_name", "tool": "actual_tool_name", "params": {}, "depends_on": ["task_name"]}
   ],
-  "completion": {"message": "Result message"}
 }
 
 EXAMPLES:
@@ -49,7 +48,6 @@ Request: "Hello"
 {
   "goal": "Greet user warmly",
   "simple_response": true,
-  "completion": {"message": "Hey there! Good to see you! How's it going?"}
 }
 
 Request: "Add a note about Master Sword location"
@@ -62,7 +60,13 @@ Request: "Add a note about Master Sword location"
   "steps": [
     {"action": "add_note", "tool": "add_sticky_note", "params": {"text": "from sword_info"}, "depends_on": ["existing_notes", "sword_info"]}
   ],
-  "completion": {"message": "Added Master Sword location to notes!"}
+}
+
+Request: "I don't know what I want to drink, any suggestions?"
+{
+  "goal": "Give drink recommendation",
+  "memory_tags": ["drinks", "favorites"],
+  "preference_keys": ["beverages", "coffees"]
 }
 
 Return ONLY valid JSON. No markdown, no explanations.
@@ -151,6 +155,15 @@ PLANNING HINTS:
       }
     }
 
+    # Sanitize: planner must not emit user-facing text
+    if ($plan) {
+      try {
+        if ($plan.completion -and $plan.completion.PSObject.Properties.Match('message').Count -gt 0) {
+          $plan.completion.PSObject.Properties.Remove('message') | Out-Null
+        }
+      } catch { }
+    }
+
     # Log raw and parsed plan for inspection
     $planHome = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { try { (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } catch { (Get-Location).Path } }
     $logs = Join-Path $planHome 'logs'
@@ -178,14 +191,28 @@ PLANNING HINTS:
   } catch {
      Write-Warning "Planning failed: $($_.Exception.Message)"
     try {
-      # Fallback: use local llama.cpp to produce a minimal plan JSON
-      $llamaExe  = 'D:\llama-cpp\llama-cli.exe'
-      $modelPath = Join-Path $env:ECHO_HOME 'models\BRAIN_MODEL.gguf'  # set yours
-      $args = @(
-        '-m', $modelPath, '--gpu-layers','35','--ctx','4096',
-        '--n-predict','600','-p', $planningPrompt
-      )
-      $raw = & $llamaExe @args | Out-String
+      # Fallback: use local llama.cpp via runner to produce a plan JSON
+      $home = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { 'D:\Echo' }
+      $logs = Join-Path $home 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
+      $sys = @'
+Return ONLY valid JSON for the requested plan. No markdown. No commentary. If unsure, emit:
+{"goal":"Respond conversationally","simple_response":true,"info_tasks":[],"steps":[],"completion":{}}
+'@
+      $chatml = "<|im_start|>system`n$sys<|im_end|>`n<|im_start|>user`n$planningPrompt<|im_end|>`n<|im_start|>assistant`n"
+      $pf = Join-Path $logs ("planner_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
+      [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
+      $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
+      $modelPath = $null
+      try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
+      if (-not $modelPath) {
+        $g = Join-Path $home 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
+        if (Test-Path -LiteralPath $g) { $modelPath = $g } else { $modelPath = (Join-Path $home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf') }
+      }
+      $runner = Join-Path $home 'tools\Start-LocalLLM.ps1'
+      $gpu = 35; $ctx = 4096
+      try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $gpu = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
+      try { if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { $ctx = [int]$env:ECHO_LLAMA_CTX } } catch {}
+      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctx -GpuLayers $gpu -Temp 0.2 -MaxTokens 600 -FlashAttn | Out-String
       $clean = ($raw -replace '```json','' -replace '```','').Trim()
       $plan = $clean | ConvertFrom-Json
       if ($plan) { return $plan }

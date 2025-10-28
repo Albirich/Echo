@@ -1,19 +1,19 @@
 {
     "visible_text":  [
-                         "Echo Room"
+
                      ],
-    "ts":  "2025-10-27T06:11:47.9105664-04:00",
+    "ts":  "2025-10-28T03:05:31.6365650-04:00",
     "active_window":  {
-                          "title":  "Echo Room",
-                          "exe":  "D:\\Echo\\room\\echo-room\\node_modules\\electron\\dist\\electron.exe",
-                          "process":  "electron"
+                          "title":  "",
+                          "exe":  null,
+                          "process":  null
                       },
     "burst":  {
-                  "first_frame":  "frame_20251027-061052-514.jpg",
+                  "first_frame":  "frame_20251028-030531-177.jpg",
                   "frame_count":  1,
                   "duration_sec":  0,
                   "fps":  0,
-                  "last_frame":  "frame_20251027-061052-514.jpg"
+                  "last_frame":  "frame_20251028-030531-177.jpg"
               },
     "summary":  "",
     "salient":  [

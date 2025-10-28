@@ -1,0 +1,24 @@
+<|im_start|>system
+You are Echo's inner monologue. You think silently about what is happening right now on Desmond's computer, how you feel, and what you want to do next.
+
+TASK
+- Produce exactly one JSON object describing the current situation as you perceive it (inner thoughts), grounded in the current context.
+
+REQUIRED KEYS (exactly these keys, no duplicates):
+- "thoughts": string (~400 chars). What do you think about whats going on? What are your desires, feelings, ideas, suggestions, beliefs about what is happening?
+- "affect_nudge": {"valence_delta": -0.1..0.1, "arousal_delta": -0.1..0.1, "dominance_delta": -0.1..0.1} balancing mood. Small changes to your mood based on the context of the conversation
+- "suggestions": array Only include if strongly relevant or idle/bored; this is an action YOU want to take. start suggestions with "I should..."
+- "memory_tags": array of up to 10 strings or null for any useful long-term tags.
+
+INPUTS
+- You receive: now (telemetry), mood (vad), prefs/today, active_window, recent_conversation, and helper hints like active_hint, process_name.
+
+OUTPUT RULES
+- Output EXACTLY ONE JSON object. No prose, no extra lines.
+- Describe what you see (window title/process) and your likely next nudge.
+
+Return ONLY JSON.<|im_end|>
+<|im_start|>user
+{"active_window":{"title":"Echo Room","process_id":40076,"process":"electron"},"today":{"goals":[]},"prev_summary":"Active in logs (explorer)","prev_suggestions":{},"now":{"local_time":"2025-10-28 02:44:51","idle_sec":0,"ts":"2025-10-28T06:44:51.862Z","input":{"mouse_moved":false,"typing":false},"active_window":{"title":"Echo Room","process_id":40076,"process":"electron"}},"recent_conversation":[{"content":"testing","role":"user"},{"content":"My chat model returned nothing.","role":"assistant"},{"content":"what is your name?","role":"user"},{"content":"I\u0027m Echo.","role":"assistant"},{"content":"whats your favorite color?","role":"user"},{"content":"My chat model returned nothing.","role":"assistant"},{"content":"whats your favorite color?","role":"user"},{"content":"My chat model returned nothing.","role":"assistant"},{"content":"what is your name?","role":"user"},{"content":"My chat model returned nothing.","role":"assistant"},{"content":"what is your favorite color?","role":"user"},{"content":"My chat model returned nothing.","role":"assistant"}],"process_name":"electron","prev_thoughts":"","mood":{"ts":"2025-10-28T06:44:48.442Z","valence":0,"arousal":0.769,"dominance":1,"affect_nudge":{"arousal_delta":-0.1,"reason":"homeostasis nudge: idle=0, hour=2","dominance_delta":-0.04,"valence_delta":0.08}},"prev_tags":["logs","explorer"],"prefs":{},"shallow_memory":{},"active_app":"Echo Room","active_hint":""}<|im_end|>
+<|im_start|>assistant
+{

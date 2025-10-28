@@ -1,0 +1,13 @@
+﻿{
+    "debug":  "im:off",
+    "proposal":  {
+                     "rationale_1l":  "Phase 1 baseline: IM disabled",
+                     "thread_id":  "none",
+                     "fallback":  "none",
+                     "type":  "ThinkOnly",
+                     "expected_outcome":  "no-op"
+                 },
+    "mindframe_deltas":  [
+
+                         ]
+}

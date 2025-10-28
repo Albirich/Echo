@@ -34,7 +34,9 @@ if (-not (Test-Path -LiteralPath $hostFlag)) { [IO.File]::WriteAllText($hostFlag
 $env:ECHO_USE_LLAMA_CPP = '1'
 $env:ECHO_IM_USE_LLAMA_CPP = '1'
 # Ensure specific gguf models are selected
+# Prefer Gemma 3 4B IT for chat if present; else keep existing model
 $env:ECHO_LLAMACPP_MODEL = (Join-Path $HOME_DIR 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf')
+Write-Host ("[EchoAll] Chat model: {0}" -f $env:ECHO_LLAMACPP_MODEL)
 $env:ECHO_IM_LLAMACPP_MODEL = (Join-Path $HOME_DIR 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf')
 
 # Prefer GPU across all components
@@ -124,7 +126,9 @@ function Warmup-OllamaModel { param([string]$Model)
   if (-not (Test-OllamaReachable 2)) { Write-Host '[EchoAll] Skipping warmup (Ollama not reachable).'; return }
   try {
     $body = @{ model=$Model; stream=$false; messages=@(@{role='system';content='warmup'},@{role='user';content='hi'}) } | ConvertTo-Json -Depth 6
-    $uri = (if ($env:OLLAMA_HOST -and $env:OLLAMA_HOST.Trim()) { $env:OLLAMA_HOST.TrimEnd('/') } else { 'http://127.0.0.1:11434' }) + '/api/chat'
+    $base = 'http://127.0.0.1:11434'
+    if ($env:OLLAMA_HOST -and $env:OLLAMA_HOST.Trim()) { $base = $env:OLLAMA_HOST.TrimEnd('/') }
+    $uri = $base + '/api/chat'
     Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 180 | Out-Null
     Write-Host ("[EchoAll] Warmed model: {0}" -f $Model)
   } catch { Write-Host ("[EchoAll] Warmup failed for {0}: {1}" -f $Model, $_.Exception.Message) }

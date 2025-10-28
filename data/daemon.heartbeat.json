@@ -1,0 +1,13 @@
+{
+<<<<<<< HEAD
+    "pid":  26924,
+    "model":  "echo:friend",
+    "stage":  "heartbeat",
+    "ts":  "2025-09-22T20:41:55.4252296-04:00"
+=======
+    "pid":  18228,
+    "model":  "dolphin-llama3:8b",
+    "stage":  "heartbeat",
+    "ts":  "2025-09-24T02:04:01.9505555-04:00"
+>>>>>>> 42c514f (Initial commit: Echo core (without ui/, models/, logs/))
+}

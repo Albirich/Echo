@@ -1,0 +1,4 @@
+{
+  "goal": "Respond conversationally",
+  "simple_response": true,
+}
