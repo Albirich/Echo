@@ -27,6 +27,8 @@ $LOGS = Join-Path $EchoRoot 'logs'; Ensure-Dir $LOGS
 $PPTH = Join-Path $LOGS 'prompts'; Ensure-Dir $PPTH
 
 Import-Module (Join-Path $EchoRoot 'tools\PromptBuilder.psm1') -Force -DisableNameChecking
+try { . (Join-Path $EchoRoot 'tools\Preferences.ps1') } catch {}
+function Get-AgentName { if ($env:ECHO_AGENT_NAME -and $env:ECHO_AGENT_NAME.Trim()) { return $env:ECHO_AGENT_NAME } return 'Forge' }
 
 Append-Jsonl $OUTB @{ ts=(Get-Date).ToString('o'); kind='system'; channel='daemon'; event='llama.daemon.ready'; model=(Split-Path $ModelPath -Leaf); inbox=$INBX; root=$EchoRoot; poll_ms=$PollMs }
 Write-Output ("[llama-daemon] Ready. Inbox: {0}" -f $INBX)
@@ -69,6 +71,16 @@ while ($true) {
       $memory  = Get-TextOrEmpty (Join-Path $EchoRoot 'memory\shallow.md')
       $persona = Get-TextOrEmpty (Join-Path $EchoRoot 'prompts\persona.brain.md')
       $system  = Get-TextOrEmpty (Join-Path $EchoRoot 'prompts\system.base.md')
+      $system += ("`n`nAlways state your name as {0} if asked. Do not report model names." -f (Get-AgentName))
+      # Enrich system prompt with stable preferences so the model answers consistently
+      try {
+        if (Get-Command Get-PreferencesSummary -ErrorAction SilentlyContinue) {
+          $prefSummary = Get-PreferencesSummary
+          if ($prefSummary -and $prefSummary.Trim()) {
+            $system += "`n`nMy Preferences`n$prefSummary`nRules:`n- When asked for favorites/preferences, answer with YOUR preferences above in first person.`n- Do not claim you lack personal preferences; you do have them. Keep answers consistent across the session."
+          }
+        }
+      } catch {}
       $prompt  = Build-ChatML -System $system -User $text -Tools $tools -Memory $memory -Persona $persona
 
       $ts = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
