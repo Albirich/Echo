@@ -9,6 +9,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# ---------------------------
+# Environment & paths
+# ---------------------------
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $env:ECHO_HOME -or -not (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME = $ScriptRoot }
+if (-not $env:OLLAMA_HOST   -or $env:OLLAMA_HOST   -eq '') { $env:OLLAMA_HOST   = 'http://127.0.0.1:11434' }
+if (-not $env:ECHO_CHAT_MODEL -or $env:ECHO_CHAT_MODEL -eq '') { $env:ECHO_CHAT_MODEL = 'qwen2.5:3b' }
+if (-not $env:ECHO_MODEL -or $env:ECHO_MODEL -eq '') { $env:ECHO_MODEL = $env:ECHO_CHAT_MODEL }
+if (-not $env:ECHO_STAND    -or $env:ECHO_STAND    -eq '') { $env:ECHO_STAND    = (Join-Path $env:ECHO_HOME 'stand') }
+
+# ==== Echo Home helpers (moved below param) ====
+function Get-EchoHome {
+  param()
+  $h = $env:ECHO_HOME
+  if (-not $h -or -not (Test-Path -LiteralPath $h)) { $h = $PSScriptRoot }
+  return $h
+}
+$Script:EchoHome = Get-EchoHome
+# ==== end helpers ====
+
 # Fast-path: emit a ChatML prompt file for llama.cpp and exit
 if ($EmitPromptFile) {
   try { Import-Module "D:\Echo\tools\PromptBuilder.psm1" -Force -DisableNameChecking -ErrorAction SilentlyContinue } catch { }
@@ -16,7 +36,6 @@ if ($EmitPromptFile) {
   $inbox = Join-Path $env:ECHO_HOME "ui\inboxq"
   New-Item -ItemType Directory -Force -Path $inbox | Out-Null
 
-  # If your script already assembles $prompt elsewhere, you can replace this block.
   $tools   = Get-TextOrEmpty (Join-Path $env:ECHO_HOME "prompts\echo-tools.txt")
   $memory  = Get-TextOrEmpty (Join-Path $env:ECHO_HOME "memory\shallow.md")
   $persona = Get-TextOrEmpty (Join-Path $env:ECHO_HOME "prompts\persona.brain.md")
@@ -33,23 +52,12 @@ if ($EmitPromptFile) {
       [System.IO.File]::WriteAllText($BrainPromptFile, $prompt, [System.Text.UTF8Encoding]::new($false))
     }
   } catch {
-    # Fallback
     $prompt | Set-Content -NoNewline -Encoding UTF8 $BrainPromptFile
   }
   Write-Output $BrainPromptFile
   return
 }
 
-# ---------------------------
-# Environment & paths
-# ---------------------------
-$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $env:ECHO_HOME -or -not (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME = $ScriptRoot }
-if (-not $env:OLLAMA_HOST   -or $env:OLLAMA_HOST   -eq '') { $env:OLLAMA_HOST   = 'http://127.0.0.1:11434' }
-# Default Ollama chat model (used only for REST fallback)
-if (-not $env:ECHO_CHAT_MODEL -or $env:ECHO_CHAT_MODEL -eq '') { $env:ECHO_CHAT_MODEL = 'qwen2.5:3b' }
-if (-not $env:ECHO_MODEL -or $env:ECHO_MODEL -eq '') { $env:ECHO_MODEL = $env:ECHO_CHAT_MODEL }
-if (-not $env:ECHO_STAND    -or $env:ECHO_STAND    -eq '') { $env:ECHO_STAND    = (Join-Path $env:ECHO_HOME 'stand') }
 
 $UI_DIR  = Join-Path $env:ECHO_HOME 'ui'
 $INBOX_Q = Join-Path $UI_DIR 'inboxq'
@@ -2761,3 +2769,107 @@ while ($true) {
   }
 }
 
+
+# ============================
+# Interrupt Controller (lightweight router)
+# ============================
+function Should-Interrupt {
+  param(
+    [Parameter(Mandatory=$true)][string]$UserText,
+    [Parameter(Mandatory=$true)][string]$Model,
+    [int]$TimeoutSec = 12
+  )
+  try {
+    $sys = @'
+Return ONLY valid JSON with exactly these keys:
+{"interrupt":true|false,"reason":"short phrase","route":"quick|defer|cancel","priority":0..1}
+Rules:
+- "quick" if a one-line answer/no tools is enough (e.g., greeting, quick fact, small talk)
+- "defer" if current agentic loop should continue and we can reply later
+- "cancel" if the new message invalidates the running plan
+- Be conservative: prefer defer unless clearly urgent or trivial.
+'@
+    $prompt = "<|im_start|>system`n$sys<|im_end|>`n<|im_start|>user`n$($UserText)`n<|im_end|>`n<|im_start|>assistant`n"
+    $runner = Join-Path (Get-EchoHome) 'tools\Start-LocalLLM.ps1'
+    $llamaExe = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
+    $pf = Join-Path (Get-EchoHome) ('logs\interrupt_{0}.txt' -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
+    [System.IO.File]::WriteAllText($pf, $prompt, [System.Text.UTF8Encoding]::new($false))
+    $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath (
+      $(
+        if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path -LiteralPath $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL }
+        else {
+          $cand = @(
+            (Join-Path (Get-EchoHome) 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'),
+            (Join-Path (Get-EchoHome) 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'),
+            (Join-Path (Get-EchoHome) 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf')
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          $cand
+        }
+      )
+    ) -LlamaExe $llamaExe -CtxSize 1024 -GpuLayers 20 -Temp 0.2 -MaxTokens 120 -FlashAttn | Out-String
+    $clean = ($raw -replace '```json','' -replace '```','').Trim()
+    try { return ($clean | ConvertFrom-Json) } catch { return @{ interrupt=$false; reason='parse_fail'; route='defer'; priority=0.0 } }
+  } catch {
+    return @{ interrupt=$false; reason='error'; route='defer'; priority=0.0 }
+  }
+}
+
+function Write-InterruptDecision {
+  param($Decision, [string]$InboxPath, [string]$OutboxPath)
+  try {
+    $evt = @{
+      ts = (Get-Date).ToString('o')
+      kind = 'system'
+      channel = 'trace'
+      stage = 'interrupt.decide'
+      data = $Decision
+    } | ConvertTo-Json -Depth 10 -Compress
+    if ($OutboxPath -and (Test-Path -LiteralPath $OutboxPath)) {
+      Add-Content -LiteralPath $OutboxPath -Value $evt -Encoding UTF8
+    }
+  } catch {}
+}
+
+function Start-InterruptController {
+  param(
+    [string]$Model = $(if ($env:ECHO_IM_MODEL) { $env:ECHO_IM_MODEL } else { 'qwen2.5:3b' }),
+    [string]$Inbox  = $(Join-Path (Get-EchoHome) 'ui\inboxq'),
+    [string]$Outbox = $(Join-Path (Get-EchoHome) 'ui\outbox.jsonl'),
+    [string]$Logs   = $(Join-Path (Get-EchoHome) 'logs'),
+    [int]$ThrottleMs = 1500
+  )
+  if (-not (Test-Path -LiteralPath $Inbox)) { return }
+  if (-not (Test-Path -LiteralPath $Logs)) { New-Item -ItemType Directory -Force -Path $Logs | Out-Null }
+
+  Start-Job -Name 'Echo.Interruptor' -ScriptBlock {
+    param($Model, $Inbox, $Outbox, $Logs, $ThrottleMs)
+    while ($true) {
+      try {
+        $files = Get-ChildItem -LiteralPath $Inbox -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+        if ($files) {
+          $content = Get-Content -LiteralPath $files.FullName -Raw -Encoding UTF8
+          $decision = Should-Interrupt -UserText $content -Model $Model
+          Write-InterruptDecision -Decision $decision -InboxPath $Inbox -OutboxPath $Outbox
+          if ($decision.interrupt -and $decision.route -eq 'quick') {
+            # Write a tiny "typing" ack so the UI shows activity
+            $ack = @{
+              ts=(Get-Date).ToString('o')
+              kind='assistant'
+              text='(handling quickly...)'
+            } | ConvertTo-Json -Compress
+            if ($Outbox) { Add-Content -LiteralPath $Outbox -Value $ack -Encoding UTF8 }
+          }
+        }
+      } catch {}
+      Start-Sleep -Milliseconds $ThrottleMs
+    }
+  } -ArgumentList $Model, $Inbox, $Outbox, $Logs, $ThrottleMs | Out-Null
+}
+
+
+# Auto-start interruptor (if not running)
+try {
+  if (-not (Get-Job -Name 'Echo.Interruptor' -ErrorAction SilentlyContinue)) {
+    Start-InterruptController -Model $env:ECHO_IM_MODEL
+  }
+} catch {}
