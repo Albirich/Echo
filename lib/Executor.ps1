@@ -1,4 +1,12 @@
 # Executor.ps1 - Executes structured plans with parallel info gathering
+function Resolve-Template {
+  param([string]$Template, [hashtable]$Ctx)
+  return [regex]::Replace($Template, '\{\{(\w+)\}\}', {
+    param($m)
+    $k = $m.Groups[1].Value
+    if ($Ctx.ContainsKey($k)) { [string]$Ctx[$k] } else { $m.Value }
+  })
+}
 
 function Invoke-InfoTask {
   param(
@@ -177,8 +185,19 @@ function Execute-Plan {
     [string]$OutboxPath,
     [string]$HomeDir,
     [int]$HeartbeatSec = 6,
-    [scriptblock]$InterruptCheck = $null
+    [scriptblock]$InterruptCheck = $null,
+    [hashtable]$Context
   )
+
+    # If planner already decided to speak (e.g., missing tools), do it.
+  if ($Plan.completion -and $Plan.completion.mode -eq 'speak' -and $Plan.completion.template) {
+    $ctx = @{}
+    if ($Plan.missing_tools) { $ctx['missing_tools'] = ($Plan.missing_tools -join ', ') }
+    # add any other context keys you want exposed to templates
+    $msg = Resolve-Template -Template $Plan.completion.template -Ctx $ctx
+    Write-Mouth $msg
+    return @{ success = $true; payload = $null }
+  }
 
   # Local helper: safe outbox append
   $append = {

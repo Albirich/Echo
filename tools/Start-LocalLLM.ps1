@@ -43,12 +43,12 @@ if (-not $Mmproj -and $env:ECHO_VISION_MMPROJ) {
 }
 
 # Build args with compatibility for different llama binaries
-function Get-LlamaArgs {
-  param(
-    [string]$Exe,[string]$Model,[int]$Ctx,[int]$Gpu,[int]$Max,[double]$Temperature,[string]$Prompt,[switch]$Flash,[string[]]$Imgs,[string]$Mm,[switch]$WantJson
-  )
-  $help = ''
-  try { $help = (& $Exe -h 2>&1 | Out-String) } catch { try { $help = (& $Exe --help 2>&1 | Out-String) } catch { $help = '' } }
+  function Get-LlamaArgs {
+    param(
+      [string]$Exe,[string]$Model,[int]$Ctx,[int]$Gpu,[int]$Max,[double]$Temperature,[string]$Prompt,[switch]$Flash,[string[]]$Imgs,[string]$Mm,[switch]$WantJson
+    )
+    $help = ''
+    try { $help = (& $Exe -h 2>&1 | Out-String) } catch { try { $help = (& $Exe --help 2>&1 | Out-String) } catch { $help = '' } }
   $leaf = try { (Split-Path -Leaf $Exe) } catch { '' }
   $isMtmd = ($leaf -ieq 'llama-mtmd-cli.exe' -or $help -like '*Experimental CLI for multimodal*')
   $useLong = ($help -like '*--prompt-file*')
@@ -81,8 +81,27 @@ function Get-LlamaArgs {
     $a += @("-f", $Prompt, "-r", "<|im_end|>")
   }
   }
-  # If JSON requested, aggressively disable chat templating; fallback handled after run if unsupported
-  if ($WantJson -and -not ($a -contains '-no-cnv')) { $a += '-no-cnv' }
+    # Optional session/prompt-cache to speed repeated calls (if supported)
+    try {
+      $hasSession      = ($help -like '*--session *' -or $help -like '* --session*')
+      $hasSessionOut   = ($help -like '*--session-out*' -or $help -like '* --session-out *' -or $help -like '*--save-session*')
+      $hasPromptCache  = ($help -like '*--prompt-cache*')
+      $hasPromptAll    = ($help -like '*--prompt-cache-all*')
+      $promptDir = try { Split-Path -Parent $Prompt } catch { $null }
+      if (-not $promptDir -or -not (Test-Path $promptDir)) { $promptDir = try { Split-Path -Parent $Model } catch { $env:TEMP } }
+      $cacheDir = Join-Path $promptDir 'cache'; if (-not (Test-Path $cacheDir)) { New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null }
+      $leaf = try { (Split-Path -Leaf $Model).ToLower() } catch { 'model' }
+      $safeLeaf = ($leaf -replace '[^a-z0-9_.-]','_')
+      $sessFile = Join-Path $cacheDir ("sess_" + $safeLeaf + '.bin')
+      $pcFile   = Join-Path $cacheDir ("pcache_" + $safeLeaf + '.bin')
+      if ($hasSession)    { $a += @('--session', $sessFile) }
+      if ($hasSessionOut) { $a += @('--session-out', $sessFile) }
+      if ($hasPromptCache){ $a += @('--prompt-cache', $pcFile) }
+      if ($hasPromptAll)  { $a += @('--prompt-cache-all') }
+    } catch { }
+
+    # If JSON requested, aggressively disable chat templating; fallback handled after run if unsupported
+    if ($WantJson -and -not ($a -contains '-no-cnv')) { $a += '-no-cnv' }
   # If caller requests strict JSON and binary supports it, constrain output
   if ($WantJson -and $hasGrammarJson) { $a += @('--grammar-json') }
   if ($Flash -and $hasFlash) { $a += @("--flash-attn") }

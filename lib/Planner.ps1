@@ -42,6 +42,25 @@ For tool-based requests:
   ],
 }
 
+TOOLS AWARENESS (IMPORTANT):
+- You are given an AVAILABLE TOOLS list Below.
+- If the request would require a tool that is NOT in AVAILABLE TOOLS:
+  1) Do NOT output steps.
+  2) Include `"missing_tools"` listing the required tools you don't have.
+  3) Include a `"completion"` with `"mode":"speak"` and a short, helpful user message.
+  4) Set `"simple_response": true`.
+
+OUTPUT FORMAT WHEN TOOLS ARE MISSING:
+{
+  "goal": "brief description",
+  "missing_tools": ["tool.name", "..."],
+  "simple_response": true,
+  "completion": {
+    "mode": "speak",
+    "template": "I can't do that yet — I'm missing: {{missing_tools}}. I can still help if you give me more details or we add that tool."
+  }
+}
+
 EXAMPLES:
 
 Request: "Hello"
@@ -173,6 +192,18 @@ PLANNING HINTS:
     $histLine = (@{ ts=(Get-Date).ToString('o'); ok=[bool]$plan; raw_len=$raw.Length } | ConvertTo-Json -Depth 10 -Compress) + "`n"
     Add-Content -LiteralPath (Join-Path $logs 'planner.history.jsonl') -Value $histLine -Encoding UTF8
 
+    # Emit compact outbox log with plan location/sample
+    try {
+      $outbox = Join-Path $planHome 'ui\outbox.jsonl'
+      if (Test-Path -LiteralPath $outbox) {
+        $planPath = (Join-Path $logs 'planner.last.json')
+        $sample = ''
+        try { if ($plan) { $s = ($plan | ConvertTo-Json -Depth 8 -Compress); if ($s.Length -gt 300) { $sample = $s.Substring(0,300) + '…' } else { $sample = $s } } } catch {}
+        $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='planner.output'; data=@{ ok=[bool]$plan; file=$planPath; sample=$sample } } | ConvertTo-Json -Depth 6 -Compress
+        Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+      }
+    } catch { }
+
     # Log timing to outbox if available
     try {
       $ms = [int]((Get-Date) - $t0).TotalMilliseconds
@@ -183,6 +214,9 @@ PLANNING HINTS:
         Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
       }
     } catch { }
+
+    $inv  = (Get-ToolRegistry).Keys
+    $plan = Coerce-Plan-If-MissingOrMisusedTools -Plan $plan -Inventory $inv -Request $Request
 
     if ($plan) { return $plan }
     # Fallback minimal plan: let chat model generate the reply (no canned message)
@@ -215,51 +249,130 @@ Return ONLY valid JSON for the requested plan. No markdown. No commentary. If un
       $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctx -GpuLayers $gpu -Temp 0.2 -MaxTokens 600 -FlashAttn | Out-String
       $clean = ($raw -replace '```json','' -replace '```','').Trim()
       $plan = $clean | ConvertFrom-Json
+      try {
+        $planHome = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { 'D:\\Echo' }
+        $logs = Join-Path $planHome 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
+        [System.IO.File]::WriteAllText((Join-Path $logs 'planner.last.raw.txt'), $raw, (New-Object System.Text.UTF8Encoding($false)))
+        if ($plan) { [System.IO.File]::WriteAllText((Join-Path $logs 'planner.last.json'), ($plan | ConvertTo-Json -Depth 30), (New-Object System.Text.UTF8Encoding($false))) }
+        $outbox = Join-Path $planHome 'ui\outbox.jsonl'
+        if (Test-Path -LiteralPath $outbox) {
+          $planPath = (Join-Path $logs 'planner.last.json')
+          $sample = ''
+          try { if ($plan) { $s = ($plan | ConvertTo-Json -Depth 8 -Compress); if ($s.Length -gt 300) { $sample = $s.Substring(0,300) + '…' } else { $sample = $s } } } catch {}
+          $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='planner.output'; data=@{ ok=[bool]$plan; file=$planPath; sample=$sample } } | ConvertTo-Json -Depth 6 -Compress
+          Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+        }
+      } catch { }
       if ($plan) { return $plan }
     } catch {}
     return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{} }
   }
 }
 
+function Coerce-Plan-If-MissingOrMisusedTools {
+  param(
+    $Plan,
+    [string[]] $Inventory,
+    [string]   $Request
+  )
+  if (-not $Plan) { return $Plan }
+
+  # 1) Missing tools check
+  $needed = @()
+  if ($Plan.steps) { $needed += @($Plan.steps | % { $_.tool } | ? { $_ }) }
+  $needed = $needed | Sort-Object -Unique
+  $missing = $needed | ? { $_ -notin $Inventory }
+
+  # 2) Misuse guard: treat “generate image/art” with only screenshot as missing image.generate
+  $needsImageGen = $false
+  if ($Request -match '(generate|make|create).*(image|art|picture|photo|icon|sprite)') { $needsImageGen = $true }
+  if (-not $needsImageGen -and $Plan.goal) {
+    if ($Plan.goal -match '(image|art|icon|sprite)') { $needsImageGen = $true }
+  }
+  $usesScreenshotForGen = $false
+  if ($needsImageGen -and $Plan.steps) {
+    $usesScreenshotForGen = @($Plan.steps | ? { $_.tool -eq 'take_screenshot' }).Count -gt 0
+  }
+  if ($needsImageGen -and $usesScreenshotForGen) {
+    $missing += 'image.generate'
+  }
+
+  $missing = $missing | Sort-Object -Unique
+  if ($missing.Count -eq 0) { return $Plan }
+
+  # Coerce to speak fallback
+  $Plan | Add-Member -NotePropertyName 'missing_tools' -NotePropertyValue $missing -Force
+  $Plan.simple_response = $true
+  $Plan.info_tasks = @()
+  $Plan.steps = @()
+  $Plan.completion = @{
+    mode      = 'speak'
+    template  = "I can’t do that yet — I’m missing: {{missing_tools}}. I can suggest styles/prompts or make ASCII art if you want."
+  }
+  return $Plan
+}
+
 function Validate-Plan {
-  param($Plan)
-  
-  # Check required fields
-  if (-not $Plan.goal) { return $false }
-  # Steps are preferred but not mandatory when completion depends on info_tasks
+  param(
+    $Plan,
+    [string[]] $ToolInventory = $null,  # pass (Get-ToolRegistry).Keys
+    [switch]   $Soft
+  )
+
+  # Accept simple conversational or speak-only completions
+  if ($Plan.simple_response -eq $true) {
+    if ($Plan.completion -and $Plan.completion.mode -eq 'speak' -and $Plan.completion.template) { return $true }
+    if (-not $Plan.steps -and -not $Plan.info_tasks) { return $true }
+  }
+
+    if (-not $Plan.goal) { return $false }
+
+  # NEW: allow clean "I can't" plans
+  if ($Plan.missing_tools -and $Plan.simple_response) { return $true }
+  if ($Plan.completion -and $Plan.completion.mode -eq 'speak') { return $true }
+
   $hasSteps = ($Plan.steps -and @($Plan.steps).Count -gt 0)
   $hasInfo  = ($Plan.info_tasks -and @($Plan.info_tasks).Count -gt 0)
   if (-not $hasSteps -and -not $hasInfo) { return $false }
-  
-  # Validate dependencies exist
+
+  # Dependency keys from info tasks
   $availableKeys = @()
-  if ($Plan.info_tasks) {
-    $availableKeys += $Plan.info_tasks | ForEach-Object { $_.key }
-  }
-  
+  if ($Plan.info_tasks) { $availableKeys += @($Plan.info_tasks | % { $_.key }) | ? { $_ } }
+
+  # Validate step deps & collect required tools
+  $requiredTools = @()
   if ($hasSteps) {
-    foreach ($step in $Plan.steps) {
+    foreach ($step in @($Plan.steps)) {
       if ($step.depends_on) {
-        foreach ($dep in $step.depends_on) {
+        foreach ($dep in @($step.depends_on)) {
           if ($dep -notin $availableKeys) {
             Write-Warning "Step depends on missing key: $dep"
             return $false
           }
         }
       }
+      if ($step.tool) { $requiredTools += $step.tool }
+      # (optional) if you add step.key in future: $availableKeys += $step.key
       if ($step.action) { $availableKeys += $step.action }
     }
   }
 
-  # If completion depends_on keys are present, ensure they exist in available keys
+  # completion deps
   if ($Plan.completion -and $Plan.completion.depends_on) {
-    foreach ($dep in $Plan.completion.depends_on) {
-      if ($dep -notin $availableKeys) {
-        Write-Warning "Completion depends on missing key: $dep"
-        return $false
-      }
+    foreach ($dep in @($Plan.completion.depends_on)) {
+      if ($dep -notin $availableKeys) { Write-Warning "Completion depends on missing key: $dep"; return $false }
     }
   }
-  
+
+  # Soft tool check; annotate but don't fail
+  if ($ToolInventory) {
+    $requiredTools = $requiredTools | Sort-Object -Unique
+    $missing = $requiredTools | ? { $_ -notin $ToolInventory }
+    if ($missing.Count -gt 0) {
+      $Plan | Add-Member -NotePropertyName 'missing_tools' -NotePropertyValue $missing -Force
+      if (-not $Soft) { } # keep non-fatal so executor can speak
+    }
+  }
+
   return $true
 }

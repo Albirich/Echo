@@ -1,5 +1,5 @@
-<#
-  Start-EchoAll.ps1 — minimal launcher
+﻿<#
+  Start-EchoAll.ps1 â€” minimal launcher
   Starts only these four components:
     - Start-Echo.ps1
     - Start-IM.ps1
@@ -34,12 +34,36 @@ if (-not (Test-Path -LiteralPath $hostFlag)) { [IO.File]::WriteAllText($hostFlag
 $env:ECHO_USE_LLAMA_CPP = '1'
 $env:ECHO_IM_USE_LLAMA_CPP = '1'
 # Ensure specific gguf models are selected
-# Prefer Gemma 3 4B IT for chat if present; else keep existing model
-$env:ECHO_LLAMACPP_MODEL = (Join-Path $HOME_DIR 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf')
-Write-Host ("[EchoAll] Chat model: {0}" -f $env:ECHO_LLAMACPP_MODEL)
+# Prefer Noromaid 7B Q4_K_M for chat
+$desiredChat = (Join-Path $HOME_DIR 'models\nsfw-6b-q2_k.gguf')
+$fallbackChat = (Join-Path $HOME_DIR 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf')
+$altGemma    = (Join-Path $HOME_DIR 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf')
+if (Test-Path -LiteralPath $desiredChat) {
+  $env:ECHO_LLAMACPP_MODEL = $desiredChat
+} elseif (Test-Path -LiteralPath $fallbackChat) {
+  $env:ECHO_LLAMACPP_MODEL = $fallbackChat
+} elseif (Test-Path -LiteralPath $altGemma) {
+  $env:ECHO_LLAMACPP_MODEL = $altGemma
+} else {
+  if ($env:ECHO_LLAMACPP_MODEL) { Remove-Item Env:ECHO_LLAMACPP_MODEL -ErrorAction SilentlyContinue }
+}
+$chatModelMsg = '(auto)'
+if ($env:ECHO_LLAMACPP_MODEL) { $chatModelMsg = $env:ECHO_LLAMACPP_MODEL }
+Write-Host ("[EchoAll] Chat model: {0}" -f $chatModelMsg)
+$env:ECHO_ROUTER_LLAMACPP_MODEL = (Join-Path $HOME_DIR 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf')
+Write-Host ("[EchoAll] Router model: {0}" -f $env:ECHO_ROUTER_LLAMACPP_MODEL)
 $env:ECHO_IM_LLAMACPP_MODEL = (Join-Path $HOME_DIR 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf')
 
-# Prefer GPU across all components
+# For now: force ALL components to use the IM model if present
+try {
+  if (Test-Path -LiteralPath $env:ECHO_IM_LLAMACPP_MODEL) {
+    $env:ECHO_LLAMACPP_MODEL      = $env:ECHO_IM_LLAMACPP_MODEL
+    $env:ECHO_ROUTER_LLAMACPP_MODEL = $env:ECHO_IM_LLAMACPP_MODEL
+    Write-Host ("[EchoAll] Forcing all models to IM model: {0}" -f $env:ECHO_IM_LLAMACPP_MODEL)
+  }
+} catch {}
+
+  # Prefer GPU across all components
 # Ollama: offload as many layers as possible (harmless if unused)
 $env:OLLAMA_NUM_GPU = '999'
 # Avoid forcing IM to Ollama
@@ -48,8 +72,10 @@ if ($env:ECHO_IM_BACKEND) { Remove-Item Env:ECHO_IM_BACKEND -ErrorAction Silentl
 $env:ECHO_LLAMA_THREADS = '2'
 $env:ECHO_LLAMA_MAIN_GPU = '0'
 # Llama batching (lower -> less CPU/mem spikes)
-$env:ECHO_LLAMA_BATCH = '1024'
-$env:ECHO_LLAMA_UBATCH = '256'
+  $env:ECHO_LLAMA_BATCH = '1024'
+  $env:ECHO_LLAMA_UBATCH = '256'
+
+  # Warmers start moved below Start-Child
 
 # Simple child launcher (hidden, redirects to logs)
 function Start-Child {
@@ -79,6 +105,26 @@ function Start-Child {
 }
 
 Write-Host "[EchoAll] Launching minimal Echo stack..."
+
+# Start background warmers (keep llama-cpp hot without a server)
+try {
+  $llamaExe = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\\llama-cpp\\llama-cli.exe' }
+  $routerModel = if ($env:ECHO_ROUTER_LLAMACPP_MODEL -and (Test-Path $env:ECHO_ROUTER_LLAMACPP_MODEL)) { $env:ECHO_ROUTER_LLAMACPP_MODEL } else { Join-Path $HOME_DIR 'models\\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf' }
+  $chatModel   = if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { Join-Path $HOME_DIR 'models\\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf' }
+
+  $routerGpu = '20'
+  try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $routerGpu = $env:ECHO_LLAMA_GPU_LAYERS } } catch {}
+  $chatGpu = '35'
+  try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $chatGpu = $env:ECHO_LLAMA_GPU_LAYERS } } catch {}
+
+  $routerWarm = Start-Child -Name 'warm-router' -File (Join-Path $HOME_DIR 'tools\\Keep-LlamaWarm.ps1') -WorkingDirectory $HOME_DIR -Args @('-ModelPath',$routerModel,'-LlamaExe',$llamaExe,'-IntervalSec','240','-CtxSize','1024','-GpuLayers', $routerGpu)
+  $chatWarm   = Start-Child -Name 'warm-chat'   -File (Join-Path $HOME_DIR 'tools\\Keep-LlamaWarm.ps1') -WorkingDirectory $HOME_DIR -Args @('-ModelPath',$chatModel,'-LlamaExe',$llamaExe,'-IntervalSec','300','-CtxSize','2048','-GpuLayers', $chatGpu)
+
+  # Record PID files for clean shutdown
+  [IO.File]::WriteAllText((Join-Path $state 'warm-router.pid'), [string]$routerWarm.Process.Id)
+  [IO.File]::WriteAllText((Join-Path $state 'warm-chat.pid'),   [string]$chatWarm.Process.Id)
+} catch { Write-Host "[EchoAll] Warmers failed: $($_.Exception.Message)" }
+
 
 # --- Minimal Ollama ensure + warmup for qwen2.5vl:3b ---
 function Test-OllamaReachable { param([int]$TimeoutSec=2)

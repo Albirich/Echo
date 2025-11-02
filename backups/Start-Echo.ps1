@@ -332,7 +332,7 @@ function Get-ToolRegistry {
     
     take_screenshot = @{
       name = "take_screenshot"
-      description = "Capture a screenshot of the current screen. **Cannot create or draw images/art; not an image generator.**"
+      description = "Capture a screenshot of the current screen"
       parameters = @{
         save_path = @{ type = "string"; description = "Optional path to save screenshot" }
       }
@@ -1552,8 +1552,8 @@ function Generate-SimpleChatResponse {
     $pf = Join-Path $logs ("simple_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
     [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
 
-    # Prefer Qwen2.5 7B Instruct Uncensored Q4_K_M for simple chat
-    $preferred = Join-Path $root 'models\Qwen2.5-7B-Instruct-Uncensored.Q4_K_M.gguf'
+    # Prefer the Noromaid 7B Q4_K_M model for simple chat
+    $preferred = Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
     $modelPath = $preferred
     if (-not (Test-Path -LiteralPath $modelPath)) {
       # Fallbacks
@@ -1677,10 +1677,10 @@ Rules:
         # Debug snapshot of the exact prompt used
         Write-LastChatDebug -Mode 'llama' -Model (Split-Path $modelPath -Leaf) -ChatML $chatml -PromptFile $pf -SystemPrompt $sys
 
-      # Choose llama.cpp chat model: prefer env, then Gemma 4B IT (if present), else Qwen2.5 7B Instruct Uncensored
+      # Choose llama.cpp chat model: prefer env, then Gemma 4B IT (if present), else legacy Noromaid 7B
       $candEnv   = $null; try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $candEnv = $env:ECHO_LLAMACPP_MODEL } } catch {}
       $candGemma = Join-Path $root 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
-      $candLegacy= Join-Path $root 'models\Qwen2.5-7B-Instruct-Uncensored.Q4_K_M.gguf'
+      $candLegacy= Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
       if ($candEnv) { $modelPath = $candEnv }
       elseif (Test-Path -LiteralPath $candGemma) { $modelPath = $candGemma }
       else { $modelPath = $candLegacy }
@@ -1807,7 +1807,7 @@ function Use-LocalLlama {
   $modelPath = $null
   try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
   if (-not $modelPath) {
-    $fallback = Join-Path $env:ECHO_HOME 'models\Qwen2.5-7B-Instruct-Uncensored.Q4_K_M.gguf'
+    $fallback = Join-Path $env:ECHO_HOME 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
     $modelPath = $fallback
   }
   # Build a tiny ChatML from history + user text (you already have similar code)
@@ -1876,7 +1876,7 @@ Return ONLY compact JSON according to the user's instructions. No markdown. No c
       try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
       if (-not $modelPath) {
         $cand = Join-Path $root 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
-        if (Test-Path -LiteralPath $cand) { $modelPath = $cand } else { $modelPath = (Join-Path $root 'models\Qwen2.5-7B-Instruct-Uncensored.Q4_K_M.gguf') }
+        if (Test-Path -LiteralPath $cand) { $modelPath = $cand } else { $modelPath = (Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf') }
       }
       $gpuLayers = 35; try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
       $ctxSize   = 2048; try { if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { $ctxSize = [int]$env:ECHO_LLAMA_CTX } } catch {}
@@ -2192,6 +2192,8 @@ function Execute-ToolCall {
 # ---------------------------
 function Run-AgenticLoop {
   param(
+    [Parameter(Mandatory=$true, Position=0)]
+    [Alias('UserMessage')]  
     [string]$InitialMessage,
     [switch]$Internal  # if true, do not emit assistant chat messages
   )
@@ -2760,3 +2762,4 @@ while ($true) {
     Start-Sleep -Milliseconds 300
   }
 }
+

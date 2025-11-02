@@ -1,4 +1,4 @@
-# Start-Echo.ps1 - Echo agentic brain
+﻿# Start-Echo.ps1 - Echo agentic brain
 # Reactive to user messages + proactive from IM proposals
 # Tool-capable with multi-turn execution loops
 
@@ -27,6 +27,48 @@ function Get-EchoHome {
   return $h
 }
 $Script:EchoHome = Get-EchoHome
+
+function Get-EchoHome { if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { (Get-Location).Path } }
+
+function Ensure-Resident([ValidateSet('Chat','IM')]$Role) {
+  try {
+    $root    = Get-EchoHome
+    $pidFile = Join-Path $root ("state\resident.{0}.pid" -f $Role)
+    if (Test-Path -LiteralPath $pidFile) { return }
+    $worker  = Join-Path $root 'tools\Start-ResidentLLM.ps1'
+    if (Test-Path -LiteralPath $worker) {
+      Start-Process pwsh -ArgumentList '-NoProfile','-File',$worker,'-Role',$Role | Out-Null
+      Start-Sleep -Milliseconds 200
+    }
+  } catch { }
+}
+
+function Send-ResidentLLM {
+  param(
+    [ValidateSet('Chat','IM')] [string]$Role,
+    [Parameter(Mandatory)] [string]$Text,
+    [int]$TimeoutSec = 120,
+    [string]$EchoHome = (Get-EchoHome)
+  )
+  $bus   = Join-Path $EchoHome ("bus\" + $Role)
+  $inDir = Join-Path $bus 'in'
+  $outDir= Join-Path $bus 'out'
+  New-Item -ItemType Directory -Force -Path $inDir,$outDir | Out-Null
+
+  $id  = [Guid]::NewGuid().ToString('N')
+  $inF = Join-Path $inDir  ($id + '.txt')
+  $outF= Join-Path $outDir ($id + '.txt')
+
+  [System.IO.File]::WriteAllText($inF, $Text, [Text.UTF8Encoding]::new($false))
+
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
+    if (Test-Path -LiteralPath $outF) { return (Get-Content -LiteralPath $outF -Raw) }
+    Start-Sleep -Milliseconds 50
+  }
+  throw "Resident $Role timed out after $TimeoutSec sec."
+}
+
 # ==== end helpers ====
 
 # Fast-path: emit a ChatML prompt file for llama.cpp and exit
@@ -167,6 +209,30 @@ function Trace([string]$Stage, $Data=$null) {
   } catch { }
 }
 
+# Centralized logging for AI outputs (model responses)
+function Log-AIOutput {
+  param(
+    [Parameter(Mandatory=$true)][string]$Kind,      # e.g., 'simple','ollama.chat','llama.chat','router'
+    [string]$Model,
+    [string]$Text,
+    [string]$PromptFile
+  )
+  try {
+    $rootPath = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { (Get-Location).Path }
+    $logsDir = Join-Path $rootPath 'logs'
+    if (-not (Test-Path -LiteralPath $logsDir)) { New-Item -ItemType Directory -Force -Path $logsDir | Out-Null }
+    $ts = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
+    $file = Join-Path $logsDir ("ai_{0}_{1}.txt" -f $Kind,$ts)
+    if ($Text) { [IO.File]::WriteAllText($file, $Text, [Text.UTF8Encoding]::new($false)) }
+    $sample = ''
+    try {
+      if ($Text) { if ($Text.Length -gt 300) { $sample = $Text.Substring(0,300) + 'â€¦' } else { $sample = $Text } }
+    } catch { }
+    $len = 0; try { if ($Text) { $len = [int]$Text.Length } } catch { }
+    Trace 'ai.output' @{ kind=$Kind; model=$Model; len=$len; file=$file; prompt=$PromptFile; sample=$sample }
+  } catch { }
+}
+
 function Write-Mouth([string]$Text) {
   Append-Outbox @{ kind='assistant'; channel='mouth'; text=$Text; ts=(Get-Date).ToString('o') }
 }
@@ -231,6 +297,21 @@ function Load-ConversationHistory([int]$Max = 10) {
   return ,$messages
 }
 
+function Format-ConversationHistory {
+  param(
+    [Array]$Messages,
+    [int]$MaxCharsPerUtterance = 320
+  )
+  if (-not $Messages) { return '' }
+  $sb = [System.Text.StringBuilder]::new()
+  foreach ($m in $Messages) {
+    if (-not $m.role -or -not $m.content) { continue }
+    $t = ([string]$m.content -replace '\s+',' ').Trim()
+    if ($t.Length -gt $MaxCharsPerUtterance) { $t = $t.Substring(0,$MaxCharsPerUtterance) + 'â€¦' }
+    [void]$sb.AppendLine(('{0}: {1}' -f $m.role, $t))
+  }
+  $sb.ToString().Trim()
+}
 
 function Read-TextUtf8NoBom([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) { return '' }
@@ -247,7 +328,7 @@ function Sanitize-String([string]$s) {
 function Truncate-Text([string]$s, [int]$max=6000) {
   if (-not $s) { return '' }
   if ($s.Length -le $max) { return $s }
-  return .Substring(0,[Math]::Max(0,-1)) + '...'
+  try { return $s.Substring(0, [Math]::Max(0, $max - 1)) + '...' } catch { return $s }
 }
 
 
@@ -1171,7 +1252,7 @@ function Load-LatestVision {
             }
         }
 
-        # Otherwise it’s a single snapshot object
+        # Otherwise itâ€™s a single snapshot object
         return $json
     } catch {
         # Fallback: assume JSONL (pick last non-empty line and parse)
@@ -1253,6 +1334,11 @@ function Normalize-Vision {
 }
 
 function Build-ContextPrompt {
+  param(
+    [int]$HistoryMax = 50,                # how many lines from conversation_history.jsonl
+    [int]$HistoryUtteranceMaxChars = 320  # clamp per-utterance length
+  )
+
   $state = Load-ContextState
   $lines = @()
   
@@ -1306,7 +1392,6 @@ function Build-ContextPrompt {
   
   # Vision
   $visionLine = $null
-  # If vision summary exists but is empty, try to derive a brief line from caption fields
   try {
     if ($state.vision -and $state.vision.PSObject.Properties.Match('summary').Count -gt 0) {
       $s = ("" + $state.vision.summary)
@@ -1323,8 +1408,8 @@ function Build-ContextPrompt {
   if ($state.vision -and $state.vision.summary) {
     $visionLine = $state.vision.summary
   } else {
-    $v = Get-VisionStruct
-    $visionLine = Build-VisionSummary $v
+    $vObj = Get-VisionStruct
+    $visionLine = Build-VisionSummary $vObj
   }
 
   if ($visionLine) {
@@ -1332,16 +1417,24 @@ function Build-ContextPrompt {
     $lines += $visionLine
   }
 
-  
   # Memory hints
   if ($state.context -and $state.context.shallow_memory -and $state.context.shallow_memory.Count -gt 0) {
     $lines += "`nThings I know about the situation."
     $lines += ($state.context.shallow_memory -join '; ')
   }
-  
+
+  # >>> NEW: Recent conversation (from conversation_history.jsonl)
+  try {
+    $hist = Load-ConversationHistory -Max $HistoryMax
+    $recent = Format-ConversationHistory -Messages $hist -MaxCharsPerUtterance $HistoryUtteranceMaxChars
+    if ($recent) {
+      $lines += "`nRecent conversation (latest last)"
+      $lines += $recent
+    }
+  } catch {}
+
   return ($lines -join "`n")
 }
-
 
 # ---------------------------
 # System Prompt with Tools
@@ -1533,7 +1626,7 @@ $prefsBlock
 $contextInfo
 
 Guidance:
-- Keep answers short and natural (1–2 lines unless asked for detail).
+- Keep answers short and natural (1â€“2 lines unless asked for detail).
 - Never reply with a one-word acknowledgement.
 "@
   return Truncate-Text ($full -replace '\r\n?', "`n").Trim() 8000
@@ -1560,16 +1653,14 @@ function Generate-SimpleChatResponse {
     $pf = Join-Path $logs ("simple_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
     [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
 
-    # Prefer the Noromaid 7B Q4_K_M model for simple chat
+    # Prefer env-specified chat model; else Noromaid; else Gemma 4B IT
     $preferred = Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
-    $modelPath = $preferred
+    $modelPath = $null
+    try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
+    if (-not $modelPath) { $modelPath = $preferred }
     if (-not (Test-Path -LiteralPath $modelPath)) {
-      # Fallbacks
-      try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
-      if (-not (Test-Path -LiteralPath $modelPath)) {
-        $gemma = Join-Path $root 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
-        if (Test-Path -LiteralPath $gemma) { $modelPath = $gemma } else { $modelPath = $preferred }
-      }
+      $gemma = Join-Path $root 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
+      if (Test-Path -LiteralPath $gemma) { $modelPath = $gemma } else { $modelPath = $preferred }
     }
 
     $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
@@ -1590,7 +1681,10 @@ function Generate-SimpleChatResponse {
       if (Test-Path -LiteralPath $dbg) { try { $ll = Get-Content -LiteralPath $dbg -Raw | ConvertFrom-Json; if ($ll.log) { $logPath = [string]$ll.log } } catch {} }
       Trace 'simple.chat.resp' @{ len=($text.Length); empty=([string]::IsNullOrWhiteSpace($text)); prompt=$pf; log=$logPath }
     } catch {}
-    if ($text) { return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) } }
+    if ($text) {
+      Log-AIOutput -Kind 'simple' -Model (Split-Path $modelPath -Leaf) -Text $text -PromptFile $pf
+      return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) }
+    }
   } catch {
     Trace 'simple.chat.err' @{ error=$_.Exception.Message }
   }
@@ -1719,6 +1813,7 @@ Rules:
         $text = Clean-AssistantOutput $text
         Trace 'llama.resp' @{ len=$text.Length; empty=([string]::IsNullOrWhiteSpace($text)); model=(Split-Path $modelPath -Leaf) }
         if (-not [string]::IsNullOrWhiteSpace($text)) {
+          try { Log-AIOutput -Kind 'llama.chat' -Model (Split-Path $modelPath -Leaf) -Text $text -PromptFile $pf } catch {}
           return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) }
         } else {
           $snippet = ''
@@ -1795,6 +1890,7 @@ Rules:
       }
       $text = Clean-AssistantOutput $text
       Trace 'ollama.resp' @{ len=$text.Length; ms=$ms; model=$Model }
+      if ($text) { Log-AIOutput -Kind 'ollama.chat' -Model $Model -Text $text -PromptFile $null }
       return @{ ok=$true; text=$text; model=$Model }
     } catch {
       $ms = [int]((Get-Date) - $t0).TotalMilliseconds
@@ -1810,25 +1906,66 @@ Rules:
 }
 
 function Use-LocalLlama {
-  param([string]$UserText,[array]$ConversationHistory)
-  $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
-  $modelPath = $null
-  try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
-  if (-not $modelPath) {
-    $fallback = Join-Path $env:ECHO_HOME 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
-    $modelPath = $fallback
-  }
-  # Build a tiny ChatML from history + user text (you already have similar code)
-  $chatml = "<|im_start|>system`n" + (Build-SystemPrompt) + "<|im_end|>`n"
-  foreach ($m in $ConversationHistory) { if ($m.role -and $m.content) { $chatml += "<|im_start|>$($m.role)`n$($m.content)<|im_end|>`n" } }
-  $chatml += "<|im_start|>user`n$UserText<|im_end|>`n<|im_start|>assistant`n"
+  param(
+    [string]$UserText,
+    [array]$ConversationHistory,
+    [int]$TimeoutSec = 120,
+    [int]$MaxHistory = 16
+  )
 
-  $gpu = 35; try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $gpu = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
-  $ctx = 4096; try { if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { $ctx = [int]$env:ECHO_LLAMA_CTX } } catch {}
-  $args = @('-m',$modelPath,'--gpu-layers',"$gpu",'--ctx',"$ctx",'--n-predict','320','-p',$chatml)
-  $out = & $llamaExe @args | Out-String
-  $text = ($out -replace '(?i)\s*\[end of text\]\s*$','' -replace '(?i)\s*<\|im_end\|>\s*$','' -replace '(?i)\s*</s>\s*$','').Trim()
-  return @{ ok=$true; text=$text; model='llama.cpp' }
+  try { Ensure-Resident 'Chat' } catch {}
+
+  # Build ChatML safely
+  $sys = [string](Build-SystemPrompt)
+  $parts = @()
+
+  $hasPrelude = ($sys -and ($sys.TrimStart() -like '<|im_start|>*'))
+  if ($hasPrelude) {
+    $parts += $sys.Trim()
+  } elseif ($sys) {
+    $parts += "<|im_start|>system`n$sys<|im_end|>"
+    # keep tiny few-shot to reduce bland acks
+    $parts += "<|im_start|>user`nping<|im_end|>"
+    $parts += "<|im_start|>assistant`nPong!<|im_end|>"
+  }
+
+  # Filter & cap history (drop tool/other roles)
+  $validRoles = @('user','assistant','system')
+  $history =
+    $ConversationHistory |
+    Where-Object { $_ -and $_.role -and $_.content -and ($validRoles -contains $_.role) } |
+    Select-Object -Last $MaxHistory
+
+  foreach ($m in $history) {
+    $parts += "<|im_start|>$($m.role)`n$($m.content)<|im_end|>"
+  }
+
+  if ($UserText) { $parts += "<|im_start|>user`n$UserText<|im_end|>" }
+  $parts += "<|im_start|>assistant`n"
+  $chatml = ($parts -join "`n")
+
+  # Debug snapshot
+  $root = Get-EchoHome
+  $logs = Join-Path $root 'logs'
+  if (-not (Test-Path -LiteralPath $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
+  $pf = Join-Path $logs ("chat_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
+  [System.IO.File]::WriteAllText($pf, $chatml, [Text.UTF8Encoding]::new($false))
+  Write-LastChatDebug -Mode 'resident' -Model 'resident.Chat' -ChatML $chatml -PromptFile $pf -SystemPrompt $sys
+
+  try {
+    $t0   = Get-Date
+    $text = (Send-ResidentLLM -Role 'Chat' -Text $chatml -TimeoutSec $TimeoutSec)
+    $text = if ($null -ne $text) { $text.Trim() } else { '' }
+    $ms   = [int]((Get-Date) - $t0).TotalMilliseconds
+
+    if ($text) { Log-AIOutput -Kind 'llama.chat' -Model 'resident.Chat' -Text $text -PromptFile $pf }
+    Trace 'resident.ok' @{ role='Chat'; ms=$ms; chars=$text.Length }
+
+    return @{ ok=([bool]$text); text=$text; model='resident.Chat' }
+  } catch {
+    Trace 'resident.err' @{ role='Chat'; error=$_.Exception.Message }
+    return @{ ok=$false; text=''; error=$_.Exception.Message; model='resident.Chat' }
+  }
 }
 
 # ---------------------------
@@ -1839,19 +1976,22 @@ function Send-IMChat {
     [Parameter(Mandatory)][string]$Prompt,
     [int]$TimeoutSec = 20
   )
+
+  # Try Ollama first (shorter budget for router)
   $model = if ($env:ECHO_IM_MODEL -and $env:ECHO_IM_MODEL.Trim()) { $env:ECHO_IM_MODEL } else { 'qwen2.5:3b' }
-  $uri = ($env:OLLAMA_HOST.TrimEnd('/')) + '/api/chat'
-  $body = @{
-    model = $model
-    stream = $false
-    messages = @(@{ role='user'; content=$Prompt })
-    options = @{ temperature=0.2; num_predict=400; num_gpu=20 }
-  } | ConvertTo-Json -Depth 8
   $preferLocal = $false
   try { if ($env:ECHO_USE_LLAMA_CPP -and ($env:ECHO_USE_LLAMA_CPP -match '^(1|true|yes)$')) { $preferLocal = $true } } catch {}
 
   if (-not $preferLocal) {
     try {
+      $uri  = ($env:OLLAMA_HOST.TrimEnd('/')) + '/api/chat'
+      $body = @{
+        model = $model
+        stream = $false
+        messages = @(@{ role='user'; content=$Prompt })
+        options = @{ temperature=0.2; num_predict=120; num_gpu=20 }
+      } | ConvertTo-Json -Depth 8
+
       $t0 = Get-Date
       $resp = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $body -TimeoutSec $TimeoutSec
       $ms = [int]((Get-Date) - $t0).TotalMilliseconds
@@ -1863,40 +2003,28 @@ function Send-IMChat {
     }
   }
 
-  if ($preferLocal) {
-    try {
-      try { Import-Module (Join-Path $env:ECHO_HOME 'tools\PromptBuilder.psm1') -Force -DisableNameChecking } catch { }
-      $sys = @'
-Return ONLY compact JSON according to the user's instructions. No markdown. No commentary. If you are unsure, return an empty JSON object {}.
+  # Local resident planner (no server, fast TTFB)
+  try {
+    try { Ensure-Resident 'IM' } catch {}
+    $sys = @'
+Return ONLY compact JSON according to the user's instructions. No prose, no code fences, no commentary. If you are unsure, return an empty JSON object {}.
 '@
-      $parts = @()
-      $parts += "<|im_start|>system`n$sys<|im_end|>"
-      $parts += "<|im_start|>user`n$Prompt<|im_end|>"
-      $parts += "<|im_start|>assistant`n"
-      $chatml = ($parts -join "`n")
-      $root = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-      $logs = Join-Path $root 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
-      $pf = Join-Path $logs ("im_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
-      [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
-      $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
-      # Choose planning/IM model: prefer ECHO_LLAMACPP_MODEL if set, else Gemma 4B IT
-      $modelPath = $null
-      try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
-      if (-not $modelPath) {
-        $cand = Join-Path $root 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
-        if (Test-Path -LiteralPath $cand) { $modelPath = $cand } else { $modelPath = (Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf') }
-      }
-      $gpuLayers = 35; try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
-      $ctxSize   = 2048; try { if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { $ctxSize = [int]$env:ECHO_LLAMA_CTX } } catch {}
-      $runner    = Join-Path $root 'tools\Start-LocalLLM.ps1'
-      $text = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctxSize -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 400 -FlashAttn | Out-String
-      $text = $text.Trim()
-      if ($text) { return $text }
-    } catch {
-      Append-Outbox @{ kind='system'; channel='trace'; stage='im.plan'; data=@{ ok=$false; error=('local_llama: ' + $_.Exception.Message) } }
-    }
+    $parts = @()
+    $parts += "<|im_start|>system`n$sys<|im_end|>"
+    $parts += "<|im_start|>user`n$Prompt<|im_end|>"
+    $parts += "<|im_start|>assistant`n"
+    $chatml = ($parts -join "`n")
+
+    $t0 = Get-Date
+    $text = (Send-ResidentLLM -Role 'IM' -Text $chatml -TimeoutSec ([Math]::Max(10,$TimeoutSec))).Trim()
+    $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+    Log-AIOutput -Kind 'im.plan' -Model 'resident.IM' -Text $text -PromptFile $null
+    Append-Outbox @{ kind='system'; channel='trace'; stage='im.plan'; data=@{ ms=$ms; ok=$true; model='resident.IM' } }
+    return $text
+  } catch {
+    Append-Outbox @{ kind='system'; channel='trace'; stage='im.plan'; data=@{ ok=$false; model='resident.IM'; error=$_.Exception.Message } }
+    return '{}'
   }
-  return ''
 }
 
 # ---------------------------
@@ -2253,7 +2381,7 @@ function Run-AgenticLoop {
     if (-not $text) { return $null }
     $t = $text.ToLower()
 
-    # Greetings / small talk — respond instantly without planning/model
+    # Greetings / small talk â€” respond instantly without planning/model
     if ($t -match '^\s*(?:hi|hello|hey|yo|sup|yo!|hiya|howdy)\b' -or $t -match '\b(?:what''s up|whats up|how are you)\b') {
       return [pscustomobject]@{
         goal           = 'Greet user warmly'
@@ -2435,7 +2563,7 @@ function Run-AgenticLoop {
       }
     } else {
       <#
-      $fallback = if ($plan.completion -and $plan.completion.message) { $plan.completion.message } else { "I’m here—try me again?" }
+      $fallback = if ($plan.completion -and $plan.completion.message) { $plan.completion.message } else { "Iâ€™m hereâ€”try me again?" }
       if ($emitAssistant) {
         Append-Outbox @{ kind='assistant'; model='fallback'; text=$fallback }
         Append-ConversationLine 'assistant' $fallback
@@ -2645,7 +2773,7 @@ function Run-AgenticLoop {
     }
   }
 
-  # End-of-loop: optionally commit important learned memories (0–2 max)
+  # End-of-loop: optionally commit important learned memories (0â€“2 max)
   try { Maybe-CommitImportantMemories -InitialMessage $InitialMessage -AssistantMessage $execution.message } catch { }
 
   Trace 'agentic.complete' @{ planned=$true; pivot=$false }
@@ -2796,10 +2924,11 @@ Rules:
     [System.IO.File]::WriteAllText($pf, $prompt, [System.Text.UTF8Encoding]::new($false))
     $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath (
       $(
-        if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path -LiteralPath $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL }
+        if ($env:ECHO_ROUTER_LLAMACPP_MODEL -and (Test-Path -LiteralPath $env:ECHO_ROUTER_LLAMACPP_MODEL)) { $env:ECHO_ROUTER_LLAMACPP_MODEL }
         else {
           $cand = @(
             (Join-Path (Get-EchoHome) 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'),
+            (Join-Path (Get-EchoHome) 'models\nidum-Nidum-Gemma-2B-Uncensored-Q2_K.gguf'),
             (Join-Path (Get-EchoHome) 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'),
             (Join-Path (Get-EchoHome) 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf')
           ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
@@ -2808,7 +2937,13 @@ Rules:
       )
     ) -LlamaExe $llamaExe -CtxSize 1024 -GpuLayers 20 -Temp 0.2 -MaxTokens 120 -FlashAttn | Out-String
     $clean = ($raw -replace '```json','' -replace '```','').Trim()
-    try { return ($clean | ConvertFrom-Json) } catch { return @{ interrupt=$false; reason='parse_fail'; route='defer'; priority=0.0 } }
+    try {
+      $routerModel = $null; try { if ($env:ECHO_ROUTER_LLAMACPP_MODEL) { $routerModel = (Split-Path $env:ECHO_ROUTER_LLAMACPP_MODEL -Leaf) } } catch {}
+      if ($clean) { Log-AIOutput -Kind 'router' -Model $routerModel -Text $clean -PromptFile $pf }
+      return ($clean | ConvertFrom-Json)
+    } catch {
+      return @{ interrupt=$false; reason='parse_fail'; route='defer'; priority=0.0 }
+    }
   } catch {
     return @{ interrupt=$false; reason='error'; route='defer'; priority=0.0 }
   }
@@ -2873,3 +3008,5 @@ try {
     Start-InterruptController -Model $env:ECHO_IM_MODEL
   }
 } catch {}
+
+

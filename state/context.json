@@ -1,26 +1,27 @@
 ﻿{
-    "ts":  "2025-10-28T07:05:18.127Z",
+    "ts":  "2025-11-02T07:27:02.575Z",
     "mood":  {
                  "valence":  0,
-                 "arousal":  0.769,
+                 "arousal":  0.987,
                  "dominance":  1
              },
     "active_window":  {
-                          "title":  "logs",
-                          "process_id":  9596,
-                          "process":  "explorer"
+                          "title":  "Echo Room",
+                          "process_id":  6496,
+                          "process":  "electron"
                       },
     "idle_sec":  0,
     "vision":  {
                    "summary":  "",
                    "visible_text":  [
-                                        "logs"
+                                        "outbox.jsonl - Echo"
                                     ]
                },
-    "summary":  "Active in logs (explorer)",
+    "summary":  "Active in Echo Room (electron)",
     "tags":  [
-                 "logs",
-                 "explorer"
+                 "Echo",
+                 "Room",
+                 "electron"
              ],
     "thoughts":  "",
     "suggestions":  [

@@ -20,15 +20,12 @@ function Kill-PidsFromFiles($files) {
 
 Write-Verbose "[StopEcho] Killing known child processes (from PID files)..."
 $pidFiles = @(
-  (Join-Path $state 'ollama.pid'),
+  Join-Path $state 'ollama.pid'),
   (Join-Path $state 'chat.pid'),
   (Join-Path $state 'im.pid'),
   (Join-Path $state 'vision.pid'),
   (Join-Path $state 'visionprobe.pid'),
-  (Join-Path $state 'room.pid'),
-  (Join-Path $state 'warm-router.pid'),
-  (Join-Path $state 'warm-chat.pid')
-)
+  (Join-Path $state 'room.pid')
 Kill-PidsFromFiles $pidFiles
 
 Write-Verbose "[StopEcho] Killing common stragglers by name..."
