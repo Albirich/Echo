@@ -1479,5 +1479,19 @@
         "t":  1762065139149,
         "source":  "IM",
         "text":  "I should start a new task. Could you please suggest something?"
+    },
+    {
+        "signature":  "f93c513faf1c3c4d4ce3a7ef38da4fad3d87abfe",
+        "content":  "Hello! How may I help you?",
+        "t":  1762105687791,
+        "source":  "IM",
+        "text":  "Hello! How may I help you?"
+    },
+    {
+        "signature":  "069f65ec1160262e11a9f686ad3bc892a67a8467",
+        "content":  "you took a minute and 45 seconds to respond. thats pretty slow",
+        "t":  1762105687791,
+        "source":  "IM",
+        "text":  "you took a minute and 45 seconds to respond. thats pretty slow"
     }
 ]

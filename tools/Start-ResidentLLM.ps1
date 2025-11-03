@@ -1,130 +1,191 @@
+#requires -Version 5.1
 param(
   [ValidateSet('Chat','IM')] [string]$Role = 'Chat',
-  [string]$ModelPath = 'D:\Echo\models\athirdpath-7b-Q4_K_M.gguf',
-  [int]$CtxSize = 2048,
-  [int]$NPredict = 256,
+  [Parameter(Mandatory=$true)] [string]$ModelPath,
 
-  # leave these nullable; we’ll fill them from env or fallback below
-  [Nullable[Int]]$Threads,
-  [Nullable[Int]]$GpuLayers,
-  [Nullable[Int]]$Batch,
-  [Nullable[Int]]$UBatch,
+  # inference params
+  [int]$CtxSize   = 2048,
+  [int]$NPredict  = 192,
+  [int]$Threads   = 3,
+  [int]$GpuLayers = 24,     # 24 for 2B; 100 = as many as possible
+  [int]$Batch     = 512,
+  [int]$UBatch    = 0,      # only used if llama-cli -h shows -ub/--ubatch-size
 
-  [string]$EchoHome = 'D:\Echo',
-  [int]$ReadBuf = 4096
+  [string]$EchoHome = 'D:\Echo'
 )
-function Get-EnvInt {
-  param([string]$Name, [int]$Default)
-  $v = [Environment]::GetEnvironmentVariable($Name)
-  if ($v -and ($v -match '^\d+$')) { return [int]$v }
-  return $Default
-}
-
-if (-not $PSBoundParameters.ContainsKey('Threads'))    { $Threads    = Get-EnvInt 'ECHO_LLAMA_THREADS' 6 }
-if (-not $PSBoundParameters.ContainsKey('GpuLayers'))  { $GpuLayers  = Get-EnvInt 'ECHO_LLAMA_GPU' 35 }
-if (-not $PSBoundParameters.ContainsKey('Batch'))      { $Batch      = Get-EnvInt 'ECHO_LLAMA_BATCH' 512 }
-if (-not $PSBoundParameters.ContainsKey('UBatch'))     { $UBatch     = Get-EnvInt 'ECHO_LLAMA_UBATCH' 128 }
 
 $ErrorActionPreference = 'Stop'
-$exe = "D:\llama-cpp\llama-cli.exe"  # adjust if different
-$bus = Join-Path $EchoHome "bus\$Role"
-$state = Join-Path $EchoHome "state"
-$null = New-Item -ItemType Directory -Force -Path $bus,$state | Out-Null
+$exe = 'D:\llama-cpp\llama-cli.exe'
 
-# Use a constant sentinel; we instruct the model to print it at the end.
-$SENTINEL = '<<<EOT>>>'
-$PIDFILE  = Join-Path $state "resident.$Role.pid"
-Set-Content -Path $PIDFILE -Value $PID
+if (-not (Test-Path -LiteralPath $exe))       { throw "llama-cli.exe not found at $exe" }
+if (-not (Test-Path -LiteralPath $ModelPath)) { throw "Model not found: $ModelPath" }
 
-# Launch llama-cli in interactive mode with clean I/O (no banners)
-$argList = @(
-  '-m', $ModelPath,
-  '--ctx-size', $CtxSize,
-  '--n-predict', $NPredict,
-  '--threads', $Threads,
-  '--n-gpu-layers', $GpuLayers,
-  '--batch-size', $Batch,
-  '--ubatch-size', $UBatch,
-  '--interactive',
-  '--instruct',
-  '--simple-io'
-)
+# --- folders / setup ---
+function Ensure-Dir([string]$p){
+  if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
+}
+$stateDir = Join-Path $EchoHome 'state'
+$busRole  = Join-Path (Join-Path $EchoHome 'bus') $Role
+$inDir    = Join-Path $busRole 'in'
+$outDir   = Join-Path $busRole 'out'
+$logDir   = Join-Path $EchoHome 'logs'
+$tmpDir   = Join-Path $EchoHome 'tmp'
+Ensure-Dir $stateDir; Ensure-Dir $inDir; Ensure-Dir $outDir; Ensure-Dir $logDir; Ensure-Dir $tmpDir
 
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = $exe
-$psi.Arguments = ($argList -join ' ')
-$psi.UseShellExecute = $false
-$psi.RedirectStandardInput  = $true
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError  = $true
-$psi.CreateNoWindow = $true
+$pidFile = Join-Path $stateDir ("resident.{0}.pid" -f $Role)
+Set-Content -LiteralPath $pidFile -Value $PID -Encoding ASCII
 
-$p = New-Object System.Diagnostics.Process
-$p.StartInfo = $psi
-[void]$p.Start()
+Write-Host ("[{0}] Resident runner ready. IN: {1} | OUT: {2}" -f $Role,$inDir,$outDir)
 
-# Utility: write a prompt and stream output until SENTINEL appears
-function Invoke-One {
-  param([string]$prompt, [string]$outFile)
+# --- helpers ---
+function Invoke-Proc([string[]]$argList){
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName               = $exe
+  $psi.Arguments              = ($argList -join ' ')
+  $psi.UseShellExecute        = $false
+  $psi.CreateNoWindow         = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError  = $true
+  $p = New-Object System.Diagnostics.Process
+  $p.StartInfo = $psi
+  [void]$p.Start()
+  $ok = $p.WaitForExit(60000)  # 60s hard cap
+  if (-not $ok) { try { $p.Kill() } catch {} ; Start-Sleep -Milliseconds 100 }
+  @{ out = $p.StandardOutput.ReadToEnd(); err = $p.StandardError.ReadToEnd() }
+}
 
-  # Force the model to mark completion reliably
-  $full = @"
-$prompt
+# --- per-job: try non-interactive; if empty, fall back to interactive streaming ---
+function Run-One([string]$inFile,[string]$outFile){
+  # Read the job and wrap if it's plain text (no chat markers)
+  $raw = [System.IO.File]::ReadAllText($inFile,[Text.UTF8Encoding]::new($false))
+  $feedFile = $inFile
+  $composed = $null
+  if ($raw -notmatch '<start_of_turn>|<\|im_start\|>') {
+    $composed = Join-Path $tmpDir ("chat.{0}.{1}.txt" -f [IO.Path]::GetFileNameWithoutExtension($inFile),(Get-Random))
+    @"
+<start_of_turn>user
+$raw
+<end_of_turn>
+<start_of_turn>model
+"@ | Set-Content -LiteralPath $composed -NoNewline -Encoding UTF8
+    $feedFile = $composed
+  }
 
-When you are completely finished, output exactly $SENTINEL and nothing else after it.
-"@
+  # Build interactive args
+  $args = @(
+    '-m',   $ModelPath,
+    '-i',
+    '-c',   $CtxSize,
+    '-n',   $NPredict,
+    '-t',   $Threads,
+    '-ngl', $GpuLayers,
+    '-b',   $Batch,
+    '-f',   $feedFile,
+    '-r',   '<end_of_turn>'
+  )
+  if ($UBatch -gt 0) { $args += @('-ub', $UBatch) }
 
-  $p.StandardInput.WriteLine($full)
+  # Start process
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName               = $exe
+  $psi.Arguments              = ($args -join ' ')
+  $psi.UseShellExecute        = $false
+  $psi.CreateNoWindow         = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError  = $true
+  $p = New-Object System.Diagnostics.Process
+  $p.StartInfo = $psi
+  [void]$p.Start()
 
-  $buf = New-Object System.Text.StringBuilder
-  $fs  = [System.IO.StreamWriter]::new($outFile, $false, [Text.UTF8Encoding]::new($false))
+  # Open OUT with shared access so readers/AV don't block us
+  $fs = [System.IO.File]::Open(
+    $outFile,
+    [System.IO.FileMode]::Create,
+    [System.IO.FileAccess]::Write,
+    [System.IO.FileShare]::ReadWrite
+  )
+  $writer = New-Object System.IO.StreamWriter($fs, [Text.UTF8Encoding]::new($false))
+  $writer.AutoFlush = $false
+
+  $reader = $p.StandardOutput
+  $buf    = New-Object char[] 4096
+  $acc    = New-Object System.Text.StringBuilder
+  $flushT = [System.Diagnostics.Stopwatch]::StartNew()
+  $idleT  = [System.Diagnostics.Stopwatch]::StartNew()
+  $hardT  = [System.Diagnostics.Stopwatch]::StartNew()
+
+  $IdleMs  = 2000
+  $HardSec = 60
 
   try {
     while ($true) {
-      $ch = $p.StandardOutput.Read()  # -1 if closed
-      if ($ch -lt 0) { throw "llama-cli exited unexpectedly." }
-      $c = [char]$ch
-      $fs.Write($c)        # live stream to file
-      $buf.Append($c) | Out-Null
-
-      if ($buf.Length -ge $SENTINEL.Length) {
-        $tail = $buf.ToString($buf.Length - $SENTINEL.Length, $SENTINEL.Length)
-        if ($tail -eq $SENTINEL) { break }
+      if ($p.HasExited) { break }
+      $n = $reader.Read($buf, 0, $buf.Length)   # blocking
+      if ($n -le 0) {
+        if ($acc.Length -gt 0 -and $idleT.ElapsedMilliseconds -ge $IdleMs) { break }
+        continue
       }
+      $chunk = -join $buf[0..($n-1)]
+      $idleT.Restart()
+
+      $writer.Write($chunk)
+      $acc.Append($chunk) | Out-Null
+
+      if ($flushT.ElapsedMilliseconds -ge 100) { $writer.Flush(); $flushT.Restart() }
+
+      $txt = $acc.ToString()
+      if ($txt.IndexOf('<end_of_turn>', [StringComparison]::Ordinal) -ge 0) { break }
+      if ($hardT.Elapsed.TotalSeconds -ge $HardSec) { break }
     }
   }
   finally {
-    $fs.Flush(); $fs.Close()
+    try { $writer.Flush() } catch {}
+    try { $writer.Close(); $fs.Dispose() } catch {}
   }
 
-  # Strip sentinel from the output file
-  $txt = (Get-Content $outFile -Raw).Replace($SENTINEL,'')
-  Set-Content -Path $outFile -Value $txt -NoNewline
+  # Log stderr (so you see banner/errors)
+  try {
+    $stdErr = $p.StandardError.ReadToEnd()
+    if ($stdErr -and $stdErr.Trim().Length -gt 0) {
+      Add-Content -LiteralPath (Join-Path $logDir ("resident.{0}.err.log" -f $Role)) -Value $stdErr
+    }
+  } catch {}
+
+  try { if (-not $p.HasExited) { $p.Kill() } } catch {}
+
+  if ($composed) { try { Remove-Item -LiteralPath $composed -Force } catch {} }
 }
 
-# Main loop: watch queue and process requests
-$reqDir = Join-Path $bus 'in'
-$outDir = Join-Path $bus 'out'
-$null = New-Item -ItemType Directory -Force -Path $reqDir,$outDir | Out-Null
+# --- main poll loop (copy inbox -> temp to avoid races) ---
+try{
+  while($true){
+    $job = Get-ChildItem -LiteralPath $inDir -Filter *.txt -File -ErrorAction SilentlyContinue |
+           Sort-Object LastWriteTime | Select-Object -First 1
+    if (-not $job){ Start-Sleep -Milliseconds 200; continue }
 
-Write-Host "[$Role] Resident LLM ready. Queue: $reqDir"
-while (-not $p.HasExited) {
-  $jobs = Get-ChildItem -Path $reqDir -Filter '*.txt' -File | Sort-Object LastWriteTime
-  if ($jobs.Count -eq 0) { Start-Sleep -Milliseconds 80; continue }
+    $inFile   = $job.FullName
+    $outFile  = Join-Path $outDir $job.Name
+    $tmpIn    = Join-Path $tmpDir ("{0}.{1}.txt" -f $job.BaseName, (Get-Random))
 
-  foreach ($job in $jobs) {
-    $id  = [IO.Path]::GetFileNameWithoutExtension($job.Name)
-    $out = Join-Path $outDir "$id.txt"
-    $prompt = Get-Content $job.FullName -Raw
+    # private copy for llama-cli so nothing else can lock/delete it mid-run
+    [System.IO.File]::Copy($inFile, $tmpIn, $true)
 
-    try {
-      Invoke-One -prompt $prompt -outFile $out
+    Write-Host ("[{0}] job picked: {1}" -f $Role,$job.Name)
+    try{
+      Run-One -inFile $tmpIn -outFile $outFile
+      Write-Host ("[{0}] wrote: {1}" -f $Role,$outFile)
     } catch {
-      Set-Content $out "[RESIDENT-ERROR] $($_.Exception.Message)`n"
+      $msg = "[{0}] error: {1}" -f $Role,$_.Exception.Message
+      Add-Content -LiteralPath (Join-Path $logDir ("resident.{0}.err.log" -f $Role)) -Value $msg
+      if (-not (Test-Path -LiteralPath $outFile)) {
+        [System.IO.File]::WriteAllText($outFile,"",[Text.UTF8Encoding]::new($false))
+      }
+      Write-Host $msg
     } finally {
-      Remove-Item $job.FullName -Force -ErrorAction SilentlyContinue
+      try { Remove-Item -LiteralPath $inFile -Force } catch {}
+      try { Remove-Item -LiteralPath $tmpIn  -Force } catch {}
     }
   }
+} finally {
+  try{ Remove-Item -LiteralPath $pidFile -Force }catch{}
 }
-
-throw "Resident $Role worker terminated."

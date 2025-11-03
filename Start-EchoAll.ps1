@@ -69,11 +69,11 @@ $env:OLLAMA_NUM_GPU = '999'
 # Avoid forcing IM to Ollama
 if ($env:ECHO_IM_BACKEND) { Remove-Item Env:ECHO_IM_BACKEND -ErrorAction SilentlyContinue }
 # Reduce CPU usage while using CUDA backend
-$env:ECHO_LLAMA_THREADS = '2'
+$env:ECHO_LLAMA_THREADS = '3'
 $env:ECHO_LLAMA_MAIN_GPU = '0'
 # Llama batching (lower -> less CPU/mem spikes)
-  $env:ECHO_LLAMA_BATCH = '1024'
-  $env:ECHO_LLAMA_UBATCH = '256'
+  $env:ECHO_LLAMA_BATCH = '512'
+$env:ECHO_LLAMA_UBATCH = '128'
 
   # Warmers start moved below Start-Child
 
@@ -106,8 +106,22 @@ function Start-Child {
 
 Write-Host "[EchoAll] Launching minimal Echo stack..."
 
+# Start llama.cpp server (replaces resident worker)
+try {
+  if (-not $env:ECHO_LLAMA_SERVER -or $env:ECHO_LLAMA_SERVER.Trim() -eq '') { $env:ECHO_LLAMA_SERVER = 'http://127.0.0.1:8080' }
+  $llamaServer = Start-Child -Name 'llama-server' -File (Join-Path $HOME_DIR 'tools\Start-LlamaServer.ps1') -WorkingDirectory $HOME_DIR
+  # Record PID for clean shutdown
+  [IO.File]::WriteAllText((Join-Path $state 'server.launcher.pid'), [string]$llamaServer.Process.Id)
+} catch {
+  Write-Host ("[EchoAll] WARNING: Failed to start llama-server: {0}" -f $_.Exception.Message)
+}
+
 # Start background warmers (keep llama-cpp hot without a server)
 try {
+  if ($llamaServer -and $llamaServer.Process -and $llamaServer.Process.Id) {
+    Write-Host "[EchoAll] Warmers: skipped (llama-server running)"
+    throw 'skip-warmers'
+  }
   $llamaExe = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\\llama-cpp\\llama-cli.exe' }
   $routerModel = if ($env:ECHO_ROUTER_LLAMACPP_MODEL -and (Test-Path $env:ECHO_ROUTER_LLAMACPP_MODEL)) { $env:ECHO_ROUTER_LLAMACPP_MODEL } else { Join-Path $HOME_DIR 'models\\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf' }
   $chatModel   = if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { Join-Path $HOME_DIR 'models\\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf' }
@@ -123,7 +137,10 @@ try {
   # Record PID files for clean shutdown
   [IO.File]::WriteAllText((Join-Path $state 'warm-router.pid'), [string]$routerWarm.Process.Id)
   [IO.File]::WriteAllText((Join-Path $state 'warm-chat.pid'),   [string]$chatWarm.Process.Id)
-} catch { Write-Host "[EchoAll] Warmers failed: $($_.Exception.Message)" }
+} catch { 
+    # Warmers disabled (resident worker keeps model hot)
+    Write-Host "[EchoAll] Warmers: disabled"
+  }
 
 
 # --- Minimal Ollama ensure + warmup for qwen2.5vl:3b ---

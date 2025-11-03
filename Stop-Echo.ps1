@@ -21,6 +21,8 @@ function Kill-PidsFromFiles($files) {
 Write-Verbose "[StopEcho] Killing known child processes (from PID files)..."
 $pidFiles = @(
   (Join-Path $state 'ollama.pid'),
+  (Join-Path $state 'server.launcher.pid'),
+  (Join-Path $state 'llama-server.pid'),
   (Join-Path $state 'chat.pid'),
   (Join-Path $state 'im.pid'),
   (Join-Path $state 'vision.pid'),
@@ -33,7 +35,7 @@ Kill-PidsFromFiles $pidFiles
 
 Write-Verbose "[StopEcho] Killing common stragglers by name..."
 # llama.cpp + Ollama + helpers
-Get-Process -Name 'llama-cli','llama-mtmd-cli','ollama','ollama.exe','ollama_rocm' `
+Get-Process -Name 'llama-cli','llama-mtmd-cli','llama-server','rpc-server','ollama','ollama.exe','ollama_rocm' `
   | Stop-Process -Force:$Force
 # whisper stream variants (whisper.cpp stream.exe or custom whisper-stream.exe)
 Get-Process -Name 'stream','stream.exe','whisper-stream','whisper-stream.exe' -ErrorAction SilentlyContinue `

@@ -1,20 +1,20 @@
 ﻿{
-    "ts":  "2025-11-02T07:27:02.575Z",
+    "ts":  "2025-11-03T02:36:08.759Z",
     "mood":  {
                  "valence":  0,
-                 "arousal":  0.987,
+                 "arousal":  1,
                  "dominance":  1
              },
     "active_window":  {
                           "title":  "Echo Room",
-                          "process_id":  6496,
+                          "process_id":  21748,
                           "process":  "electron"
                       },
-    "idle_sec":  0,
+    "idle_sec":  3.4,
     "vision":  {
                    "summary":  "",
                    "visible_text":  [
-                                        "outbox.jsonl - Echo"
+                                        "Echo Room"
                                     ]
                },
     "summary":  "Active in Echo Room (electron)",

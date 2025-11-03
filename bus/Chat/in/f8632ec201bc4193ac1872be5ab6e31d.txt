@@ -1,0 +1,4 @@
+﻿<start_of_turn>user
+Say hello in one short sentence.
+<end_of_turn>
+<start_of_turn>model

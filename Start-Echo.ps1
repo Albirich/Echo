@@ -15,6 +15,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $env:ECHO_HOME -or -not (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME = $ScriptRoot }
 if (-not $env:OLLAMA_HOST   -or $env:OLLAMA_HOST   -eq '') { $env:OLLAMA_HOST   = 'http://127.0.0.1:11434' }
+if (-not $env:ECHO_LLAMA_SERVER -or $env:ECHO_LLAMA_SERVER -eq '') { $env:ECHO_LLAMA_SERVER = 'http://127.0.0.1:8080' }
 if (-not $env:ECHO_CHAT_MODEL -or $env:ECHO_CHAT_MODEL -eq '') { $env:ECHO_CHAT_MODEL = 'qwen2.5:3b' }
 if (-not $env:ECHO_MODEL -or $env:ECHO_MODEL -eq '') { $env:ECHO_MODEL = $env:ECHO_CHAT_MODEL }
 if (-not $env:ECHO_STAND    -or $env:ECHO_STAND    -eq '') { $env:ECHO_STAND    = (Join-Path $env:ECHO_HOME 'stand') }
@@ -30,17 +31,65 @@ $Script:EchoHome = Get-EchoHome
 
 function Get-EchoHome { if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { (Get-Location).Path } }
 
-function Ensure-Resident([ValidateSet('Chat','IM')]$Role) {
+function Ensure-Resident {
+  [CmdletBinding()]
+  param([ValidateSet('Chat','IM')] [string]$Role)
+
   try {
-    $root    = Get-EchoHome
-    $pidFile = Join-Path $root ("state\resident.{0}.pid" -f $Role)
-    if (Test-Path -LiteralPath $pidFile) { return }
-    $worker  = Join-Path $root 'tools\Start-ResidentLLM.ps1'
-    if (Test-Path -LiteralPath $worker) {
-      Start-Process pwsh -ArgumentList '-NoProfile','-File',$worker,'-Role',$Role | Out-Null
-      Start-Sleep -Milliseconds 200
+    $root = Get-EchoHome
+    if (-not $root) { $root = 'D:\Echo' }
+
+    $stateDir = Join-Path $root 'state'
+    $pidFile  = Join-Path $stateDir ("resident.{0}.pid" -f $Role)
+
+    # --- helper: is resident alive? ---
+    function Test-ResidentAlive([string]$pf) {
+      if ([string]::IsNullOrWhiteSpace($pf) -or -not (Test-Path -LiteralPath $pf)) { return $false }
+      $txt = Get-Content -LiteralPath $pf -Raw
+      $pidNum = 0
+      if (-not [int]::TryParse($txt, [ref]$pidNum) -or $pidNum -le 0) { return $false }
+      try { Get-Process -Id $pidNum -ErrorAction Stop | Out-Null; return $true } catch { return $false }
     }
-  } catch { }
+
+    # already up?
+    if (Test-ResidentAlive -pf $pidFile) { return }
+
+    # pick model path: env first, else best *.gguf under models
+    $model = $env:ECHO_LLAMACPP_MODEL
+    if (-not (Test-Path -LiteralPath $model)) {
+      $modelsDir = Join-Path $root 'models'
+      if (Test-Path -LiteralPath $modelsDir) {
+        $cand = Get-ChildItem -LiteralPath $modelsDir -Filter *.gguf -File -ErrorAction SilentlyContinue |
+                Sort-Object Length -Descending | Select-Object -First 1
+        if ($cand) { $model = $cand.FullName }
+      }
+    }
+    if (-not (Test-Path -LiteralPath $model)) {
+      Write-Warning "Ensure-Resident: No model found (ECHO_LLAMACPP_MODEL unset and no *.gguf in '$($root)\models')."
+      return
+    }
+
+    # start worker (PS 5.1-safe). Start-ResidentLLM.ps1 writes its own pidfile.
+    $worker = Join-Path $root 'tools\Start-ResidentLLM.ps1'
+    if (-not (Test-Path -LiteralPath $worker)) {
+      Write-Warning "Ensure-Resident: Worker script not found at $worker"
+      return
+    }
+
+    $args = @('-NoProfile','-File', $worker, '-Role', $Role, '-ModelPath', $model)
+    Start-Process powershell -ArgumentList $args -WindowStyle Hidden | Out-Null
+
+    # brief wait for readiness (up to ~5s)
+    $tries = 0
+    while ($tries -lt 25) {
+      if (Test-ResidentAlive -pf $pidFile) { break }
+      Start-Sleep -Milliseconds 200
+      $tries++
+    }
+
+  } catch {
+    Write-Warning ("Ensure-Resident error: {0}" -f $_.Exception.Message)
+  }
 }
 
 function Send-ResidentLLM {
@@ -183,6 +232,52 @@ function Write-LastChatDebug {
     $json = $obj | ConvertTo-Json -Depth 30
     [IO.File]::WriteAllText((Join-Path $dbg 'last-chat.json'), $json, [Text.UTF8Encoding]::new($false))
   } catch { }
+}
+
+function Test-LlamaServerReachable { param([int]$TimeoutSec=2)
+  try {
+    $base = if ($env:ECHO_LLAMA_SERVER -and $env:ECHO_LLAMA_SERVER.Trim()) { $env:ECHO_LLAMA_SERVER.TrimEnd('/') } else { 'http://127.0.0.1:8080' }
+    Invoke-RestMethod -Uri ($base + '/v1/models') -Method Get -TimeoutSec $TimeoutSec | Out-Null
+    return $true
+  } catch { return $false }
+}
+
+function Ensure-LlamaServer {
+  try {
+    if (Test-LlamaServerReachable 2) { return }
+    $root = Get-EchoHome
+    if (-not $root) { $root = 'D:\\Echo' }
+    $launcher = Join-Path $root 'tools\\Start-LlamaServer.ps1'
+    if (-not (Test-Path -LiteralPath $launcher)) { Write-Warning "Ensure-LlamaServer: launcher missing at $launcher"; return }
+    $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$launcher)
+    Start-Process powershell -ArgumentList $args -WindowStyle Hidden | Out-Null
+    for ($i=0; $i -lt 40; $i++) { if (Test-LlamaServerReachable 1) { break } ; Start-Sleep -Milliseconds 250 }
+  } catch { Write-Warning ("Ensure-LlamaServer error: {0}" -f $_.Exception.Message) }
+}
+
+function Invoke-LlamaServerChat {
+  param(
+    [Parameter(Mandatory)] [array]$Messages,
+    [string]$Model = 'echo',
+    [int]$TimeoutSec = 90
+  )
+  $base = if ($env:ECHO_LLAMA_SERVER -and $env:ECHO_LLAMA_SERVER.Trim()) { $env:ECHO_LLAMA_SERVER.TrimEnd('/') } else { 'http://127.0.0.1:8080' }
+  $uri = $base + '/v1/chat/completions'
+  $body = @{ model=$Model; stream=$false; messages=$Messages } | ConvertTo-Json -Depth 20 -Compress
+  $t0 = Get-Date
+  try {
+    $resp = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $body -TimeoutSec $TimeoutSec -ErrorAction Stop
+    $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+    $text = ''
+    if ($resp -and $resp.choices -and $resp.choices.Count -gt 0 -and $resp.choices[0].message -and $resp.choices[0].message.content) {
+      $text = [string]$resp.choices[0].message.content
+    } elseif ($resp -and $resp.message -and $resp.message.content) {
+      $text = [string]$resp.message.content
+    }
+    return @{ ok=([bool]$text); text=$text; ms=$ms }
+  } catch {
+    return @{ ok=$false; error=$_.Exception.Message }
+  }
 }
 
 function Add-Jsonl([string]$Path, $Obj) {
@@ -1706,12 +1801,11 @@ function Send-OllamaChat {
     try { if ($env:ECHO_USE_LLAMA_CPP -and ($env:ECHO_USE_LLAMA_CPP -match '^(1|true|yes)$')) { $preferLlama = $true } } catch {}
     try { if (-not $preferLlama -and $env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $preferLlama = $true } } catch {}
     
-    # Route via local runner with ChatML when preferred
+    # Route via local llama.cpp server when preferred
     if ($preferLlama) {
       try {
-        try { Import-Module (Join-Path $env:ECHO_HOME 'tools\PromptBuilder.psm1') -Force -DisableNameChecking } catch { }
+        try { Ensure-LlamaServer } catch {}
         $sys = Build-SystemPrompt
-        # Steering: forbid empty acknowledgements; encourage concise, concrete replies
         $sys_addendum = @'
 Rules:
 - Never reply with only "Okay." or other one-word acknowledgements.
@@ -1720,115 +1814,38 @@ Rules:
 '@
         if ($sys) { $sys = ($sys.Trim() + "`n`n" + $sys_addendum) }
 
-        # Helper: sanitize any prior messages that accidentally contained logs
-        function Clean-ForChat([string]$t,[int]$max=1200) {
-          if (-not $t) { return '' }
-          $t2 = ($t -replace "\r\n?","`n")
-          $lines = $t2 -split "`n"
-          $lines = $lines | Where-Object {
-            $_ -and -not (
-              $_ -match '^==== llama\.cpp RUN' -or
-              $_ -match '^(Saved ->|Log ->)' -or
-              $_ -match '^(llama-|llama_|llama_context:|llama_kv_cache:|llama_perf_|load_backend:|ggml_|print_info:|load_tensors:|system_info:|sampler|generate:|common_init_from_params:|load:)' -or
-              $_ -match '^Args:'
-            )
-          }
-          $s = ($lines -join "`n").Trim()
-          if ($s.Length -gt $max) { $s = $s.Substring(0,$max) }
-          return $s
-        }
-
-        $parts = @()
-        $preludeMode = ($sys -and ($sys.TrimStart() -like '<|im_start|>*'))
-        if ($preludeMode) {
-          # Treat system prompt as full ChatML prelude
-          $parts += $sys.Trim()
-        } else {
-          if ($sys) { $parts += "<|im_start|>system`n$sys<|im_end|>" }
-          # Few-shot nudge to avoid bland acks (only when not using a prelude)
-          $parts += "<|im_start|>user`nping<|im_end|>"
-          $parts += "<|im_start|>assistant`nPong!<|im_end|>"
-        }
-
-        # Filter history: drop trivial assistant acks like "Okay."
+        # Build messages (filter trivial acks)
+        $messages = @()
+        if ($sys) { $messages += @{ role='system'; content=$sys } }
         $hist = @()
         foreach ($m in $ConversationHistory) {
           if (-not ($m -and $m.role -and $m.content)) { continue }
-          $role = ($m.role -as [string]).ToLower()
-          $content = Clean-ForChat ([string]$m.content) 1000
-          $isAck = ($role -eq 'assistant' -and ($content -match '^(?i)\s*ok(ay)?[.!?\s]*$'))
-          if ($isAck) { continue }
-          if ($role -eq 'user' -or $role -eq 'assistant' -or $role -eq 'system') {
-            $hist += @{ role=$role; content=$content }
-          }
+          $role = ("" + $m.role)
+          $content = Sanitize-String ("" + $m.content)
+          if ($role -match '^(?i)assistant$' -and $content -match '^(?i)\s*ok(ay)?[.!?\s]*$') { continue }
+          if ($role -match '^(?i)(user|assistant|system)$') { $hist += @{ role=$role.ToLower(); content=$content } }
         }
-        # Keep only the last few cleaned turns to respect ctx
-        if ($hist.Count -gt 8) { $hist = $hist[-8..-1] }
-        foreach ($h in $hist) {
-          $parts += ("<|im_start|>{0}`n{1}<|im_end|>" -f $h.role, $h.content)
-        }
-        if ($UserText) { $parts += ("<|im_start|>user`n{0}<|im_end|>" -f (Clean-ForChat $UserText 800)) }
-        $parts += "<|im_start|>assistant`n"
-        $chatml = ($parts -join "`n")
+        if ($hist.Count -gt 0) { $messages += $hist }
+        if ($UserText) { $messages += @{ role='user'; content=(Sanitize-String $UserText) } }
 
-        $root = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-        $logs = Join-Path $root 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
-        $pf = Join-Path $logs ("chat_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
-        [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
-
-        # Debug snapshot of the exact prompt used
-        Write-LastChatDebug -Mode 'llama' -Model (Split-Path $modelPath -Leaf) -ChatML $chatml -PromptFile $pf -SystemPrompt $sys
-
-      # Choose llama.cpp chat model: prefer env, then Gemma 4B IT (if present), else legacy Noromaid 7B
-      $candEnv   = $null; try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $candEnv = $env:ECHO_LLAMACPP_MODEL } } catch {}
-      $candGemma = Join-Path $root 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
-      $candLegacy= Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
-      if ($candEnv) { $modelPath = $candEnv }
-      elseif (Test-Path -LiteralPath $candGemma) { $modelPath = $candGemma }
-      else { $modelPath = $candLegacy }
-        $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
-        $runner    = Join-Path $root 'tools\Start-LocalLLM.ps1'
-        # GPU/context/tokens knobs (with env fallbacks)
-        $gpuLayers = 40; if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
-        $ctxSize   = 4096; if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { try { $ctxSize = [int]$env:ECHO_LLAMA_CTX } catch {} }
-        $maxTok    = 320; if ($env:ECHO_CHAT_MAX_TOKENS -and $env:ECHO_CHAT_MAX_TOKENS.Trim()) { try { $maxTok = [int]$env:ECHO_CHAT_MAX_TOKENS } catch {} }
-        # Optional override: if Model parameter points to a specific gguf (absolute or under models/), prefer it
-        try {
-          if ($Model) {
-            if (Test-Path -LiteralPath $Model) { $modelPath = $Model }
-            elseif ($Model -match '\\.gguf$') {
-              $tryPath = Join-Path $root (Join-Path 'models' $Model)
-              if (Test-Path -LiteralPath $tryPath) { $modelPath = $tryPath }
-            }
+        Write-LastChatDebug -Mode 'llama-server' -Model 'echo' -Messages $messages -SystemPrompt $sys
+        $res = Invoke-LlamaServerChat -Messages $messages -Model 'echo' -TimeoutSec 90
+        if ($res.ok) {
+          $text = [string]$res.text
+          if ($text) {
+            $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
+            $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
+            $text = ($text -replace '(?i)\s*</s>\s*$', '')
+            $text = Clean-AssistantOutput $text
           }
-        } catch { }
-        Trace 'llama.req' @{ model=(Split-Path $modelPath -Leaf); prompt_file=$pf; prompt_len=$chatml.Length }
-        $text = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctxSize -GpuLayers $gpuLayers -Temp 0.7 -MaxTokens $maxTok -FlashAttn | Out-String
-        $text = $text.Trim()
-        # Strip trailing generation end markers sometimes echoed by models
-        $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
-        $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
-        $text = ($text -replace '(?i)\s*</s>\s*$', '')
-        $raw  = $text
-        $text = Clean-AssistantOutput $text
-        Trace 'llama.resp' @{ len=$text.Length; empty=([string]::IsNullOrWhiteSpace($text)); model=(Split-Path $modelPath -Leaf) }
-        if (-not [string]::IsNullOrWhiteSpace($text)) {
-          try { Log-AIOutput -Kind 'llama.chat' -Model (Split-Path $modelPath -Leaf) -Text $text -PromptFile $pf } catch {}
-          return @{ ok=$true; text=$text; model=(Split-Path $modelPath -Leaf) }
+          Trace 'llama.server.resp' @{ len=$text.Length }
+          if ($text) { Log-AIOutput -Kind 'llama.server.chat' -Model 'echo' -Text $text -PromptFile $null }
+          return @{ ok=$true; text=$text; model='llama.server' }
         } else {
-          $snippet = ''
-          try {
-            if ($raw) {
-              $r = $raw
-              if ($r.Length -gt 300) { $r = $r.Substring([Math]::Max(0, $r.Length-300)) }
-              $snippet = $r
-            }
-          } catch {}
-          Trace 'llama.empty' @{ reason='no_text'; model=(Split-Path $modelPath -Leaf); raw_tail=$snippet }
-          # fall through to Ollama REST as a safety net
+          return @{ ok=$false; error=$res.error; text='(llama-server unavailable)'; model='llama.server' }
         }
       } catch {
-        return @{ ok=$false; error=$_.Exception.Message; text='(llama.cpp unavailable)'; model='llama.cpp' }
+        return @{ ok=$false; error=$_.Exception.Message; text='(llama-server error)'; model='llama.server' }
       }
     }  
 
@@ -1913,58 +1930,36 @@ function Use-LocalLlama {
     [int]$MaxHistory = 16
   )
 
-  try { Ensure-Resident 'Chat' } catch {}
+  try { Ensure-LlamaServer } catch {}
 
-  # Build ChatML safely
+  # Build messages for server (system + history + user)
   $sys = [string](Build-SystemPrompt)
-  $parts = @()
-
-  $hasPrelude = ($sys -and ($sys.TrimStart() -like '<|im_start|>*'))
-  if ($hasPrelude) {
-    $parts += $sys.Trim()
-  } elseif ($sys) {
-    $parts += "<|im_start|>system`n$sys<|im_end|>"
-    # keep tiny few-shot to reduce bland acks
-    $parts += "<|im_start|>user`nping<|im_end|>"
-    $parts += "<|im_start|>assistant`nPong!<|im_end|>"
-  }
-
-  # Filter & cap history (drop tool/other roles)
+  $messages = @()
+  if ($sys) { $messages += @{ role='system'; content=$sys } }
   $validRoles = @('user','assistant','system')
-  $history =
-    $ConversationHistory |
+  $history = $ConversationHistory |
     Where-Object { $_ -and $_.role -and $_.content -and ($validRoles -contains $_.role) } |
     Select-Object -Last $MaxHistory
-
   foreach ($m in $history) {
-    $parts += "<|im_start|>$($m.role)`n$($m.content)<|im_end|>"
+    $messages += @{ role=($m.role.ToLower()); content=([string]$m.content) }
   }
+  if ($UserText) { $messages += @{ role='user'; content=([string]$UserText) } }
 
-  if ($UserText) { $parts += "<|im_start|>user`n$UserText<|im_end|>" }
-  $parts += "<|im_start|>assistant`n"
-  $chatml = ($parts -join "`n")
+  Write-LastChatDebug -Mode 'llama-server' -Model 'echo' -Messages $messages -SystemPrompt $sys
 
-  # Debug snapshot
-  $root = Get-EchoHome
-  $logs = Join-Path $root 'logs'
-  if (-not (Test-Path -LiteralPath $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
-  $pf = Join-Path $logs ("chat_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
-  [System.IO.File]::WriteAllText($pf, $chatml, [Text.UTF8Encoding]::new($false))
-  Write-LastChatDebug -Mode 'resident' -Model 'resident.Chat' -ChatML $chatml -PromptFile $pf -SystemPrompt $sys
-
-  try {
-    $t0   = Get-Date
-    $text = (Send-ResidentLLM -Role 'Chat' -Text $chatml -TimeoutSec $TimeoutSec)
-    $text = if ($null -ne $text) { $text.Trim() } else { '' }
-    $ms   = [int]((Get-Date) - $t0).TotalMilliseconds
-
-    if ($text) { Log-AIOutput -Kind 'llama.chat' -Model 'resident.Chat' -Text $text -PromptFile $pf }
-    Trace 'resident.ok' @{ role='Chat'; ms=$ms; chars=$text.Length }
-
-    return @{ ok=([bool]$text); text=$text; model='resident.Chat' }
-  } catch {
-    Trace 'resident.err' @{ role='Chat'; error=$_.Exception.Message }
-    return @{ ok=$false; text=''; error=$_.Exception.Message; model='resident.Chat' }
+  $res = Invoke-LlamaServerChat -Messages $messages -Model 'echo' -TimeoutSec $TimeoutSec
+  if ($res.ok) {
+    $text = [string]$res.text
+    if ($text) {
+      $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
+      $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
+      $text = ($text -replace '(?i)\s*</s>\s*$', '')
+      $text = Clean-AssistantOutput $text
+      try { Log-AIOutput -Kind 'llama.server.chat' -Model 'echo' -Text $text -PromptFile $null } catch {}
+    }
+    return @{ ok=([bool]$text); text=$text; model='llama-server' }
+  } else {
+    return @{ ok=$false; text=''; error=$res.error; model='llama-server' }
   }
 }
 
@@ -2003,26 +1998,25 @@ function Send-IMChat {
     }
   }
 
-  # Local resident planner (no server, fast TTFB)
+  # Local server planner (fast TTFB)
   try {
-    try { Ensure-Resident 'IM' } catch {}
-    $sys = @'
-Return ONLY compact JSON according to the user's instructions. No prose, no code fences, no commentary. If you are unsure, return an empty JSON object {}.
-'@
-    $parts = @()
-    $parts += "<|im_start|>system`n$sys<|im_end|>"
-    $parts += "<|im_start|>user`n$Prompt<|im_end|>"
-    $parts += "<|im_start|>assistant`n"
-    $chatml = ($parts -join "`n")
-
+    try { Ensure-LlamaServer } catch {}
+    $sys = "Return ONLY compact JSON according to the user's instructions. No prose, no code fences, no commentary. If unsure, return {}."
+    $messages = @(@{ role='system'; content=$sys }, @{ role='user'; content=$Prompt })
     $t0 = Get-Date
-    $text = (Send-ResidentLLM -Role 'IM' -Text $chatml -TimeoutSec ([Math]::Max(10,$TimeoutSec))).Trim()
+    $res = Invoke-LlamaServerChat -Messages $messages -Model 'echo' -TimeoutSec ([Math]::Max(10,$TimeoutSec))
     $ms = [int]((Get-Date) - $t0).TotalMilliseconds
-    Log-AIOutput -Kind 'im.plan' -Model 'resident.IM' -Text $text -PromptFile $null
-    Append-Outbox @{ kind='system'; channel='trace'; stage='im.plan'; data=@{ ms=$ms; ok=$true; model='resident.IM' } }
-    return $text
+    if ($res.ok) {
+      $text = [string]$res.text
+      Log-AIOutput -Kind 'im.plan' -Model 'llama.server' -Text $text -PromptFile $null
+      Append-Outbox @{ kind='system'; channel='trace'; stage='im.plan'; data=@{ ms=$ms; ok=$true; model='llama.server' } }
+      return ($text.Trim())
+    } else {
+      Append-Outbox @{ kind='system'; channel='trace'; stage='im.plan'; data=@{ ok=$false; model='llama.server'; error=$res.error } }
+      return '{}'
+    }
   } catch {
-    Append-Outbox @{ kind='system'; channel='trace'; stage='im.plan'; data=@{ ok=$false; model='resident.IM'; error=$_.Exception.Message } }
+    Append-Outbox @{ kind='system'; channel='trace'; stage='im.plan'; data=@{ ok=$false; model='llama.server'; error=$_.Exception.Message } }
     return '{}'
   }
 }
