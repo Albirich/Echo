@@ -3,7 +3,7 @@
   [string]$ModelPath = "D:\Echo\models\athirdpath-NSFW_DPO_Noromaid-7b-Q6_K.gguf",
   [string]$LlamaExe  = "D:\llama-cpp\llama-cli.exe",
   [int]$CtxSize      = 4096,
-  [int]$GpuLayers    = 40,
+  [int]$GpuLayers    = 100,
   [int]$MaxTokens    = 1024,
   [double]$Temp      = 0.7,
   [switch]$FlashAttn,

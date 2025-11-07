@@ -249,7 +249,7 @@ try {
 if (-not $LlamaOnly) { $env:OLLAMA_NUM_GPU = "999" }
 # Backend banner
 if ($LlamaOnly) {
-  $llmDefault = Join-Path $EchoHome 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'
+  $llmDefault = Join-Path $EchoHome 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
   $llmPath = $(if ($env:ECHO_IM_LLAMACPP_MODEL -and (Test-Path $env:ECHO_IM_LLAMACPP_MODEL)) { $env:ECHO_IM_LLAMACPP_MODEL } elseif ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } elseif (Test-Path $llmDefault) { $llmDefault } else { $null })
   if ($llmPath -and (-not $env:ECHO_IM_LLAMACPP_MODEL)) { $env:ECHO_IM_LLAMACPP_MODEL = $llmPath }
   $name = if ($llmPath) { [System.IO.Path]::GetFileName($llmPath) } else { '(unset)' }
@@ -543,10 +543,10 @@ Return ONLY JSON array of strings:
       [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
       $runner = Join-Path $EchoHome 'tools\Start-LocalLLM.ps1'
       # Resolve model path (prefer IM-specific env, then general, else preferred default under Echo/models)
-      $defaultModel = Join-Path $EchoHome 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'
+      $defaultModel = Join-Path $EchoHome 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
       $modelPath = $(if ($env:ECHO_IM_LLAMACPP_MODEL -and (Test-Path $env:ECHO_IM_LLAMACPP_MODEL)) { $env:ECHO_IM_LLAMACPP_MODEL } elseif ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { $defaultModel })
       $llamaExe  = $(if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' })
-      $gpuLayers = 40; if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } catch {} } elseif ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
+      $gpuLayers = 100; if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } catch {} } elseif ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
       $t0 = Get-Date
       $env:ECHO_LLAMA_NO_CNV = '1'
       $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize 4096 -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 220 -FlashAttn -JsonOut | Out-String
@@ -817,10 +817,10 @@ Return ONLY JSON.
 
       $runner = Join-Path $EchoHome 'tools\Start-LocalLLM.ps1'
       # Resolve model path for IM (preferred default), allow env overrides
-      $defaultModel = Join-Path $EchoHome 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'
+      $defaultModel = Join-Path $EchoHome 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
       $modelPath = $(if ($env:ECHO_IM_LLAMACPP_MODEL -and (Test-Path $env:ECHO_IM_LLAMACPP_MODEL)) { $env:ECHO_IM_LLAMACPP_MODEL } elseif ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $env:ECHO_LLAMACPP_MODEL } else { $defaultModel })
       $llamaExe  = $(if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' })
-      $gpuLayers = 40; if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } catch {} } elseif ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
+      $gpuLayers = 100; if ($env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_IM_GPU_LAYERS } catch {} } elseif ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { try { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } catch {} }
       $t0 = Get-Date
       $env:ECHO_LLAMA_NO_CNV = '1'
       $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize 4096 -GpuLayers $gpuLayers -Temp 0.2 -MaxTokens 400 -FlashAttn -JsonOut | Out-String

@@ -1,114 +1,145 @@
 [CmdletBinding()]
 param(
-  [string]$ModelPath,
-  [string]$BindHost = '127.0.0.1',
-  [int]$Port = 8080,
-  [string]$Alias = 'echo',
-  [string]$LlamaServerExe,
-  [int]$CtxSize = 2048,
-  [int]$GpuLayers = 24,
-  [int]$Threads = 3,
-  [int]$Batch = 512,
-  [int]$UBatch = 128
+    [Parameter(Mandatory=$true, Position=0)]
+    [string]$ModelPath,
+
+    [string]$ServerPath = 'D:\llama-cpp\llama-server.exe',
+    [string]$ListenHost       = '127.0.0.1',
+    [int]$Port          = 8080,
+
+    # Performance knobs
+    [int]$Threads       = ([Math]::Max(1, [Environment]::ProcessorCount - 2)),
+    [int]$ThreadsBatch  = $Threads,
+    [int]$Batch         = 1024,
+    [int]$Ctx           = 4096,
+    [int]$Ngl           = 999,
+
+    # Prompt-cache (RAM) control. Use -DisableCache to turn off entirely.
+    [int]$CacheRamMB    = 2048,
+    [switch]$DisableCache,
+
+    # Optional flags
+    [switch]$NoMmap,
+    [switch]$EnableMMQ,      # sets GGML_CUDA_FORCE_MMQ=1 for this launch
+    [switch]$KillExisting,   # stop any running llama-server first
+    [switch]$Foreground,     # run in-foreground and tee output to .out.log
+
+    # Logging
+    [string]$LogDir = 'D:\Echo\logs',
+
+    # Back-compat: allow a raw argument string to be appended (e.g., "-fa 1 --temp 0.8")
+    [string]$Args
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Ensure-Dir([string]$p){ if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null } }
-function IsoNow { (Get-Date).ToString('o') }
-
-# Resolve Echo home
-$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$EchoHome = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { Split-Path -Parent $ScriptRoot }
-Set-Location $EchoHome
-
-$state = Join-Path $EchoHome 'state'
-$logs  = Join-Path $EchoHome 'logs'
-Ensure-Dir $state; Ensure-Dir $logs
-
-# Resolve llama-server path
-if (-not $LlamaServerExe -or -not (Test-Path -LiteralPath $LlamaServerExe)) {
-  $cand = 'D:\\llama-cpp\\llama-server.exe'
-  if (Test-Path -LiteralPath $cand) { $LlamaServerExe = $cand }
+function Assert-PathExists([string]$Path, [string]$Kind) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw ("Missing {0}: {1}" -f $Kind, $Path)
+    }
 }
-if (-not (Test-Path -LiteralPath $LlamaServerExe)) { throw "llama-server.exe not found (set -LlamaServerExe or LLAMA_SERVER_EXE)" }
 
-# Pick model path: explicit, env, or best gguf under models
-if (-not $ModelPath -or -not (Test-Path -LiteralPath $ModelPath)) {
-  try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $ModelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
-}
-if (-not $ModelPath -or -not (Test-Path -LiteralPath $ModelPath)) {
-  $modelsDir = Join-Path $EchoHome 'models'
-  $cand = $null
-  if (Test-Path -LiteralPath $modelsDir) {
-    $cand = Get-ChildItem -LiteralPath $modelsDir -Filter *.gguf -File -ErrorAction SilentlyContinue |
-            Sort-Object Length -Descending | Select-Object -First 1
+
+# Robustly split a command-line string into tokens (handles quotes)
+function Split-ExtraArgs {
+    param([string]$Line)
+    if (-not $Line -or $Line.Trim().Length -eq 0) { return @() }
+
+    Add-Type -ErrorAction SilentlyContinue -Language CSharp -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ArgvHelper {
+  [DllImport("shell32.dll", SetLastError=true)]
+  private static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string lpCmdLine, out int pNumArgs);
+  [DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr hMem);
+  public static string[] Split(string cmd) {
+    if (string.IsNullOrWhiteSpace(cmd)) return new string[0];
+    int n; IntPtr p = CommandLineToArgvW(cmd, out n);
+    if (p == IntPtr.Zero) return new string[]{cmd};
+    try {
+      var a = new string[n];
+      for (int i=0;i<n;i++) {
+        IntPtr s = System.Runtime.InteropServices.Marshal.ReadIntPtr(p, i*IntPtr.Size);
+        a[i] = System.Runtime.InteropServices.Marshal.PtrToStringUni(s);
+      }
+      return a;
+    } finally { LocalFree(p); }
   }
-  if ($cand) { $ModelPath = $cand.FullName }
 }
-if (-not (Test-Path -LiteralPath $ModelPath)) { throw "Model not found: $ModelPath" }
+'@
 
-# Optional overrides from env
-try { if ($env:ECHO_LLAMA_THREADS -and $env:ECHO_LLAMA_THREADS.Trim()) { $Threads = [int]$env:ECHO_LLAMA_THREADS } } catch {}
-try { if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim())       { $CtxSize = [int]$env:ECHO_LLAMA_CTX } } catch {}
-try { if ($env:ECHO_LLAMA_BATCH -and $env:ECHO_LLAMA_BATCH.Trim())   { $Batch   = [int]$env:ECHO_LLAMA_BATCH } } catch {}
-try { if ($env:ECHO_LLAMA_UBATCH -and $env:ECHO_LLAMA_UBATCH.Trim()) { $UBatch  = [int]$env:ECHO_LLAMA_UBATCH } } catch {}
-try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $GpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
+    return [ArgvHelper]::Split($Line)
+}
 
-# Build args
-$args = @(
-  '--host', $BindHost,
-  '--port', $Port,
-  '-m',     $ModelPath,
-  '--alias', $Alias,
-  '--ctx-size', $CtxSize,
-  '--n-gpu-layers', $GpuLayers,
-  '--batch-size', $Batch,
-  '--ubatch-size', $UBatch,
-  '--no-perf'
+# --- Prep ---
+Assert-PathExists -Path $ServerPath -Kind 'llama-server.exe'
+Assert-PathExists -Path $ModelPath  -Kind 'model file'
+
+if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+
+if ($KillExisting) {
+    Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process -Force
+}
+
+# Per-process env for this launch
+if ($EnableMMQ) { $env:GGML_CUDA_FORCE_MMQ = '1' }
+
+# --- Build argument list ---
+$cli = @(
+    '-m', $ModelPath,
+    '-ngl', $Ngl,
+    '-t', $Threads,
+    '-tb', $ThreadsBatch,
+    '-b', $Batch,
+    '-c', $Ctx,
+    '--host', $ListenHost,
+    '--port', $Port
 )
-if ($Threads -gt 0) { $args += @('-t', $Threads) }
 
-$ts = Get-Date -Format 'yyyyMMdd_HHmmss'
-$out = Join-Path $logs ("llama-server-${ts}.out.log")
-$err = Join-Path $logs ("llama-server-${ts}.err.log")
-
-Write-Host ("[llama-server] Starting on http://{0}:{1} with model: {2}" -f $Host,$Port,(Split-Path -Leaf $ModelPath))
-
-$psi = @{
-  FilePath               = $LlamaServerExe
-  ArgumentList           = $args
-  WorkingDirectory       = $EchoHome
-  RedirectStandardOutput = $out
-  RedirectStandardError  = $err
-  WindowStyle            = 'Hidden'
-  PassThru               = $true
-}
-$p = Start-Process @psi
-
-# Record PID files so Stop-Echo can find them
-[IO.File]::WriteAllText((Join-Path $state 'llama-server.launcher.pid'), [string]$PID)
-[IO.File]::WriteAllText((Join-Path $state 'llama-server.pid'), [string]$p.Id)
-
-# Wait until reachable
-function Test-Reachable { param([string]$Base)
-  try {
-    Invoke-RestMethod -Uri ($Base.TrimEnd('/') + '/v1/models') -Method Get -TimeoutSec 2 | Out-Null
-    return $true
-  } catch { return $false }
-}
-
-$base = ("http://{0}:{1}" -f $BindHost, $Port)
-for ($i=0; $i -lt 40; $i++) { if (Test-Reachable $base) { break }; Start-Sleep -Milliseconds 250 }
-if (Test-Reachable $base) {
-  Write-Host ("[llama-server] Ready at {0}" -f $base)
+if ($DisableCache) {
+    $cli += @('--cache-ram','0')
 } else {
-  Write-Warning ("[llama-server] Timed out waiting for readiness at {0}" -f $base)
+    if ($CacheRamMB -ge 0) { $cli += @('--cache-ram', "$CacheRamMB") }
 }
 
-# Keep this script alive while the child runs so Start-Child can track it
-try {
-  Wait-Process -Id $p.Id
-} finally {
-  try { Remove-Item -LiteralPath (Join-Path $state 'llama-server.pid') -Force } catch {}
+if ($NoMmap) { $cli += '--no-mmap' }
+
+$extra = Split-ExtraArgs -Line $Args
+if ($extra.Count -gt 0) { $cli += $extra }
+
+# --- Logging files ---
+$ts  = Get-Date -Format 'yyyyMMdd_HHmmss'
+$out = Join-Path $LogDir "llama-server-$ts.out.log"
+$err = Join-Path $LogDir "llama-server-$ts.err.log"
+
+Write-Host "Launching llama-server with:" -ForegroundColor Cyan
+Write-Host ("  Threads/Batch: -t {0} -tb {1} -b {2} -c {3}" -f $Threads, $ThreadsBatch, $Batch, $Ctx)
+Write-Host ("  Offload:      -ngl {0}" -f $Ngl)
+Write-Host ("  Host/Port:    {0}:{1}" -f $ListenHost, $Port)
+if ($DisableCache) { Write-Host "  Cache-RAM:    disabled" } else { Write-Host ("  Cache-RAM:    {0} MiB" -f $CacheRamMB) }
+if ($EnableMMQ) { Write-Host "  GGML_CUDA_FORCE_MMQ=1" }
+if ($NoMmap)     { Write-Host "  --no-mmap enabled" }
+if ($extra.Count) { Write-Host ("  Extra args:   {0}" -f ($extra -join ' ')) }
+Write-Host ("  Logs:         `n    OUT: {0}`n    ERR: {1}" -f $out, $err)
+
+# --- Launch ---
+if ($Foreground) {
+    Write-Host "Running in foreground (Ctrl+C to stop)..." -ForegroundColor Yellow
+    & $ServerPath @cli *>&1 | Tee-Object -FilePath $out
 }
+else {
+    Start-Process -FilePath $ServerPath -ArgumentList $cli -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err | Out-Null
+    Start-Sleep -Milliseconds 250
+    $procs = Get-Process llama-server -ErrorAction SilentlyContinue | Select-Object Id,Path
+    if ($procs) {
+        Write-Host "Started llama-server:" -ForegroundColor Green
+        $procs | Format-Table -AutoSize | Out-String | Write-Host
+    } else {
+        Write-Warning "llama-server did not appear in process list; check $err"
+    }
+}
+
+# --- Helpful tail command to verify GPU usage ---
+Write-Host "Tip: Verify GPU offload with:" -ForegroundColor DarkGray
+Write-Host ("  Select-String -Path '{0}' -Pattern 'using device CUDA0|offloaded 33/33|KV buffer size|compute buffer size|n_threads'" -f $err)

@@ -21,6 +21,24 @@ if (-not $env:ECHO_MODEL -or $env:ECHO_MODEL -eq '') { $env:ECHO_MODEL = $env:EC
 if (-not $env:ECHO_STAND    -or $env:ECHO_STAND    -eq '') { $env:ECHO_STAND    = (Join-Path $env:ECHO_HOME 'stand') }
 
 # ==== Echo Home helpers (moved below param) ====
+# ---- Resolve ECHO_HOME and critical paths (safe for PS 5.1 & 7) ----
+if ([string]::IsNullOrWhiteSpace($env:ECHO_HOME)) {
+  $env:ECHO_HOME = Split-Path -Parent $PSCommandPath
+}
+
+$script:UI_DIR     = Join-Path $env:ECHO_HOME 'ui'
+$script:INBOX_Q    = Join-Path $script:UI_DIR 'inboxq'
+$script:OUTBOX     = Join-Path $script:UI_DIR 'outbox.jsonl'
+$script:STATE_DIR  = Join-Path $env:ECHO_HOME 'state'
+
+New-Item -ItemType Directory -Force -Path $script:UI_DIR,$script:INBOX_Q,$script:STATE_DIR | Out-Null
+if (-not (Test-Path -LiteralPath $script:OUTBOX)) {
+  '' | Set-Content -LiteralPath $script:OUTBOX -NoNewline -Encoding utf8
+}
+
+# Optional: stamp to confirm we’re running this exact file
+[Console]::WriteLine("[Echo] Start-Echo.ps1 build 2025-11-06 | ECHO_HOME=$($env:ECHO_HOME)")
+
 function Get-EchoHome {
   param()
   $h = $env:ECHO_HOME
@@ -29,7 +47,49 @@ function Get-EchoHome {
 }
 $Script:EchoHome = Get-EchoHome
 
+# --- Low-CPU prelude ---
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$PSModuleAutoLoadingPreference = 'None'
+
+try { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' } catch {}
+# If you keep a long-lived host, pin it to fewer cores (optional):
+# $p = Get-Process -Id $PID
+# $p.ProcessorAffinity = 0x0F   # use only the first 4 logical cores
+
 function Get-EchoHome { if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { (Get-Location).Path } }
+# --- Ensure core cmdlets are available in this process ---
+# If any script set $PSModuleAutoLoadingPreference='None', we still work.
+$PSModuleAutoLoadingPreference = 'All'
+try { Import-Module Microsoft.PowerShell.Utility   -ErrorAction Stop } catch {}
+try { Import-Module Microsoft.PowerShell.Management -ErrorAction Stop } catch {}
+
+# (Optional) If you want to keep using zero-autoload elsewhere, you can revert at the end:
+# $PSModuleAutoLoadingPreference = 'None'
+
+# --- Echo home resolver (no reliance on global $HOME / $home) ---
+$script:__ECHO_HOME = $null
+function Resolve-EchoHome {
+    if ($script:__ECHO_HOME -and (Test-Path -LiteralPath $script:__ECHO_HOME)) { 
+        return $script:__ECHO_HOME 
+    }
+
+    # DO NOT use $home / $HOME here — name collision with automatic var
+    $echoHome = $env:ECHO_HOME
+    if (-not $echoHome -or -not (Test-Path -LiteralPath $echoHome)) {
+        $root = $PSScriptRoot
+        if (-not $root) { $root = [IO.Path]::GetDirectoryName($MyInvocation.MyCommand.Path) }
+        if (-not $root) { $root = (Get-Location).Path }
+        $echoHome = $root
+        $env:ECHO_HOME = $echoHome
+    }
+
+    # cache for speed and consistency
+    $script:__ECHO_HOME = $echoHome
+    return $echoHome
+}
 
 function Ensure-Resident {
   [CmdletBinding()]
@@ -169,10 +229,17 @@ try {
 } catch { }
 try {
   if (-not $env:ECHO_LLAMACPP_MODEL -or $env:ECHO_LLAMACPP_MODEL.Trim().Length -eq 0) {
-    $gemma = Join-Path $env:ECHO_HOME 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
-    if (Test-Path -LiteralPath $gemma) { $env:ECHO_LLAMACPP_MODEL = $gemma }
+    $noromaid = Join-Path $env:ECHO_HOME 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
+    if (Test-Path -LiteralPath $noromaid) {
+      $env:ECHO_LLAMACPP_MODEL = $noromaid
+    } else {
+      $gemma = Join-Path $env:ECHO_HOME 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
+      if (Test-Path -LiteralPath $gemma) { $env:ECHO_LLAMACPP_MODEL = $gemma }
+    }
   }
 } catch { }
+try { if (-not $env:ECHO_LLAMA_THREADS -or -not $env:ECHO_LLAMA_THREADS.Trim()) { $env:ECHO_LLAMA_THREADS = '1' } } catch { }
+try { if (-not $env:ECHO_IM_THREADS    -or -not $env:ECHO_IM_THREADS.Trim())    { $env:ECHO_IM_THREADS    = '1' } } catch { }
 
 # Load planning and execution modules
 $libDir = Join-Path $env:ECHO_HOME 'lib'
@@ -259,27 +326,91 @@ function Invoke-LlamaServerChat {
   param(
     [Parameter(Mandatory)] [array]$Messages,
     [string]$Model = 'echo',
-    [int]$TimeoutSec = 90
+    [int]$TimeoutSec = 90,          # ignored on PS 5.1 (kept for signature compatibility)
+    [int]$MaxPredict = 512,
+    [double]$Temperature = 0.7
   )
-  $base = if ($env:ECHO_LLAMA_SERVER -and $env:ECHO_LLAMA_SERVER.Trim()) { $env:ECHO_LLAMA_SERVER.TrimEnd('/') } else { 'http://127.0.0.1:8080' }
-  $uri = $base + '/v1/chat/completions'
-  $body = @{ model=$Model; stream=$false; messages=$Messages } | ConvertTo-Json -Depth 20 -Compress
-  $t0 = Get-Date
-  try {
-    $resp = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $body -TimeoutSec $TimeoutSec -ErrorAction Stop
-    $ms = [int]((Get-Date) - $t0).TotalMilliseconds
-    $text = ''
-    if ($resp -and $resp.choices -and $resp.choices.Count -gt 0 -and $resp.choices[0].message -and $resp.choices[0].message.content) {
-      $text = [string]$resp.choices[0].message.content
-    } elseif ($resp -and $resp.message -and $resp.message.content) {
-      $text = [string]$resp.message.content
+
+  # Resolve base URL
+  $base = if ($env:ECHO_LLAMA_SERVER -and $env:ECHO_LLAMA_SERVER.Trim()) { $env:ECHO_LLAMA_SERVER.TrimEnd('/') } else { 'http://127.0.0.1:8080/v1' }
+  $chatUri = ($base + '/chat/completions')
+
+  # Build chat body (no -Compress; PS 5.1-safe)
+  $chatBody = @{
+    model       = $Model
+    stream      = $false
+    messages    = $Messages
+    max_tokens  = $MaxPredict
+    temperature = $Temperature
+  } | ConvertTo-Json -Depth 20
+
+  # Helper: safe POST without -TimeoutSec (PS 5.1)
+  function Invoke-PostJson5 {
+    param([string]$Uri, [string]$JsonBody)
+    try {
+      return Invoke-RestMethod -Uri $Uri -Method Post -ContentType 'application/json' -Body $JsonBody -ErrorAction Stop
+    } catch {
+      if ($_.ErrorDetails -and $_.ErrorDetails.Message) { throw $_.ErrorDetails.Message }
+      else { throw $_.Exception.Message }
     }
-    return @{ ok=([bool]$text); text=$text; ms=$ms }
+  }
+
+  # 1) Try OpenAI-style chat
+  try {
+    $t0 = Get-Date
+    $resp = Invoke-PostJson5 -Uri $chatUri -JsonBody $chatBody
+    $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+
+    $text = ''
+    if ($resp -and $resp.choices -and $resp.choices.Count -gt 0) {
+      $choice = $resp.choices[0]
+      if ($choice.message -and $choice.message.content) { $text = [string]$choice.message.content }
+      elseif ($resp.message -and $resp.message.content) { $text = [string]$resp.message.content }
+    }
+
+    if ($text -and $text.Trim().Length -gt 0) {
+      return @{ ok = $true; text = $text; ms = $ms; path = 'chat' }
+    }
+
+    throw "Empty chat response"
   } catch {
-    return @{ ok=$false; error=$_.Exception.Message }
+    $chatErr = $_
+
+    # 2) Fallback: legacy /completion (works instantly with your Gemma-2B)
+    # Flatten Messages -> prompt
+    $prompt = ""
+    foreach ($m in $Messages) {
+      if (-not $m) { continue }
+      $role    = ("" + $m.role).ToLower()
+      $content = ("" + $m.content)
+      if (-not $content) { continue }
+      if     ($role -eq 'system')    { $prompt += ($content + "`n`n") }
+      elseif ($role -eq 'user')      { $prompt += ("User: "      + $content + "`n") }
+      elseif ($role -eq 'assistant') { $prompt += ("Assistant: " + $content + "`n") }
+      else                           { $prompt += ($content + "`n") }
+    }
+    if ($prompt -notmatch "(?im)^Assistant:") { $prompt += "Assistant: " }
+
+    $legacyBase = $base -replace '/v1$',''
+    $legacyUri  = ($legacyBase.TrimEnd('/') + '/completion')
+    $legacyBody = @{ prompt = $prompt; n_predict = [Math]::Min($MaxPredict, 256); temperature = $Temperature } | ConvertTo-Json -Depth 10
+
+    try {
+      $t1 = Get-Date
+      $legacy = Invoke-PostJson5 -Uri $legacyUri -JsonBody $legacyBody
+      $ms2 = [int]((Get-Date) - $t1).TotalMilliseconds
+      if ($legacy -and $legacy.content) {
+        $txt = ("" + $legacy.content).Trim()
+        return @{ ok = ([bool]$txt); text = $txt; ms = $ms2; path = 'completion' }
+      } else {
+        return @{ ok = $false; error = "Legacy completion returned no content. Chat error: $chatErr"; path = 'completion' }
+      }
+    } catch {
+      $legacyErr = $_
+      return @{ ok = $false; error = ("Chat failed: " + $chatErr + " ; Legacy failed: " + $legacyErr); path = 'both-failed' }
+    }
   }
 }
-
 function Add-Jsonl([string]$Path, $Obj) {
   try {
     if (-not $Obj.ts) { $Obj.ts = (Get-Date).ToString('o') }
@@ -1486,30 +1617,92 @@ function Build-ContextPrompt {
   }
   
   # Vision
-  $visionLine = $null
-  try {
-    if ($state.vision -and $state.vision.PSObject.Properties.Match('summary').Count -gt 0) {
-      $s = ("" + $state.vision.summary)
-      if ([string]::IsNullOrWhiteSpace($s)) {
-        if ($state.vision.visible_text -and $state.vision.visible_text.Count -gt 0) {
-          $state.vision.summary = ($state.vision.visible_text | Where-Object { $_ } | Select-Object -First 3) -join ' | '
-        } elseif ($state.vision.active_window -and $state.vision.active_window.title) {
-          $state.vision.summary = ("" + $state.vision.active_window.title)
-        }
-      }
+  if (-not $ScreenJsonlPath -or [string]::IsNullOrWhiteSpace($ScreenJsonlPath)) {
+    $root = $env:ECHO_HOME
+    if (-not $root -or -not (Test-Path -LiteralPath $root)) {
+      try { $root = (Get-Location).Path } catch { $root = "." }
     }
-  } catch { }
-
-  if ($state.vision -and $state.vision.summary) {
-    $visionLine = $state.vision.summary
-  } else {
-    $vObj = Get-VisionStruct
-    $visionLine = Build-VisionSummary $vObj
+    $ScreenJsonlPath = Join-Path $root "ui\screen.captions.jsonl"
   }
 
-  if ($visionLine) {
-    $lines += "`nWhat I see"
-    $lines += $visionLine
+  $visionLines = @()
+  if (Test-Path -LiteralPath $ScreenJsonlPath) {
+    try {
+      # Determine how many recent summaries to include (default 5)
+      $maxSummaries = 5
+      try { if ($env:ECHO_VISION_SUMMARIES_MAX -and $env:ECHO_VISION_SUMMARIES_MAX.Trim()) { $maxSummaries = [int]$env:ECHO_VISION_SUMMARIES_MAX } } catch {}
+      try { if ($VisionSummariesMax -and ("" + $VisionSummariesMax).Trim()) { $maxSummaries = [int]$VisionSummariesMax } } catch {}
+
+      $tail = Get-Content -LiteralPath $ScreenJsonlPath -Tail $maxSummaries -ErrorAction Stop
+      foreach ($ln in $tail) {
+        if (-not $ln -or [string]::IsNullOrWhiteSpace($ln)) { continue }
+        try {
+          $obj = $ln | ConvertFrom-Json
+          # Build a robust one-liner for each record
+          $ts    = ""
+          $title = ""
+          $sum   = ""
+          try { if ($obj.ts) { $ts = ("" + $obj.ts) } } catch { }
+          try { if ($obj.title) { $title = ("" + $obj.title) } } catch { }
+          try { if ($obj.summary) { $sum = ("" + $obj.summary) } } catch { }
+
+          if ([string]::IsNullOrWhiteSpace($sum)) {
+            # synthesize from visible_text/title if present
+            try {
+              $vt = ""
+              if ($obj.visible_text -is [array] -and $obj.visible_text.Count -gt 0) {
+                $vt = ($obj.visible_text | Where-Object { $_ -and $_.ToString().Trim().Length -gt 0 } | Select-Object -First 3) -join " | "
+              }
+              if ($title) { $sum = $title }
+              if ($vt)    { if ($sum) { $sum = $sum + " — " + $vt } else { $sum = $vt } }
+            } catch { }
+            if (-not $sum -or [string]::IsNullOrWhiteSpace($sum)) { $sum = "(no summary)" }
+          }
+
+          $stamp = $ts
+          if (-not $stamp -or [string]::IsNullOrWhiteSpace($stamp)) { $stamp = "" }
+
+          if ($stamp) {
+            $visionLines += ("- [{0}] {1}" -f $stamp, $sum)
+          } else {
+            $visionLines += ("- {0}" -f $sum)
+          }
+        } catch { }
+      }
+    } catch { }
+  }
+
+  # If we got any moving vision lines, use them; else fall back to legacy single summary
+  if ($visionLines.Count -gt 0) {
+    $lines += ("`nWhat I'm seeing (latest {0})" -f $visionLines.Count)
+    $lines += $visionLines
+  } else {
+    # legacy fallback
+    $visionLine = $null
+    try {
+      if ($state.vision -and $state.vision.PSObject.Properties.Match('summary').Count -gt 0) {
+        $s = ("" + $state.vision.summary)
+        if ([string]::IsNullOrWhiteSpace($s)) {
+          if ($state.vision.visible_text -and $state.vision.visible_text.Count -gt 0) {
+            $state.vision.summary = ($state.vision.visible_text | Where-Object { $_ } | Select-Object -First 3) -join ' | '
+          } elseif ($state.vision.active_window -and $state.vision.active_window.title) {
+            $state.vision.summary = ("" + $state.vision.active_window.title)
+          }
+        }
+      }
+    } catch { }
+    if ($state.vision -and $state.vision.summary) {
+      $visionLine = $state.vision.summary
+    } else {
+      try {
+        $vObj = Get-VisionStruct
+        $visionLine = Build-VisionSummary $vObj
+      } catch { }
+    }
+    if ($visionLine) {
+      $lines += "`nWhat I see"
+      $lines += $visionLine
+    }
   }
 
   # Memory hints
@@ -1760,7 +1953,7 @@ function Generate-SimpleChatResponse {
 
     $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
     $runner    = Join-Path $root 'tools\Start-LocalLLM.ps1'
-    $gpuLayers = 40; try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
+    $gpuLayers = 100; try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $gpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
     $ctxSize   = 4096; try { if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { $ctxSize = [int]$env:ECHO_LLAMA_CTX } } catch {}
     $maxTok    = 320; try { if ($env:ECHO_CHAT_MAX_TOKENS -and $env:ECHO_CHAT_MAX_TOKENS.Trim()) { $maxTok = [int]$env:ECHO_CHAT_MAX_TOKENS } } catch {}
 
@@ -1790,136 +1983,69 @@ function Generate-SimpleChatResponse {
 # ---------------------------
 $script:OllamaDownUntil = Get-Date "2000-01-01"
 
-function Send-OllamaChat {
-  param([string]$UserText,[array]$ConversationHistory,[string]$Model=$env:ECHO_MODEL)
-  
-      if ((Get-Date) -lt $script:OllamaDownUntil) { return Use-LocalLlama -UserText $UserText -ConversationHistory $ConversationHistory }
+# Helper: PS 5.1-safe POST with timeout
+function Post-JsonHttpClient {
+  param([string]$Uri, [string]$Json, [int]$TimeoutSec = 20)
+
+  $handler = New-Object System.Net.Http.HttpClientHandler
+  $client  = New-Object System.Net.Http.HttpClient($handler)
+  $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
 
   try {
-    # Prefer llama.cpp when explicitly enabled or when a valid GGUF model path is present
-    $preferLlama = $false
-    try { if ($env:ECHO_USE_LLAMA_CPP -and ($env:ECHO_USE_LLAMA_CPP -match '^(1|true|yes)$')) { $preferLlama = $true } } catch {}
-    try { if (-not $preferLlama -and $env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $preferLlama = $true } } catch {}
-    
-    # Route via local llama.cpp server when preferred
-    if ($preferLlama) {
-      try {
-        try { Ensure-LlamaServer } catch {}
-        $sys = Build-SystemPrompt
-        $sys_addendum = @'
-Rules:
-- Never reply with only "Okay." or other one-word acknowledgements.
-- Provide a short, concrete answer or one clarifying question.
-- Keep replies to 1 to 2 sentences unless asked for detail.
-'@
-        if ($sys) { $sys = ($sys.Trim() + "`n`n" + $sys_addendum) }
-
-        # Build messages (filter trivial acks)
-        $messages = @()
-        if ($sys) { $messages += @{ role='system'; content=$sys } }
-        $hist = @()
-        foreach ($m in $ConversationHistory) {
-          if (-not ($m -and $m.role -and $m.content)) { continue }
-          $role = ("" + $m.role)
-          $content = Sanitize-String ("" + $m.content)
-          if ($role -match '^(?i)assistant$' -and $content -match '^(?i)\s*ok(ay)?[.!?\s]*$') { continue }
-          if ($role -match '^(?i)(user|assistant|system)$') { $hist += @{ role=$role.ToLower(); content=$content } }
-        }
-        if ($hist.Count -gt 0) { $messages += $hist }
-        if ($UserText) { $messages += @{ role='user'; content=(Sanitize-String $UserText) } }
-
-        Write-LastChatDebug -Mode 'llama-server' -Model 'echo' -Messages $messages -SystemPrompt $sys
-        $res = Invoke-LlamaServerChat -Messages $messages -Model 'echo' -TimeoutSec 90
-        if ($res.ok) {
-          $text = [string]$res.text
-          if ($text) {
-            $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
-            $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
-            $text = ($text -replace '(?i)\s*</s>\s*$', '')
-            $text = Clean-AssistantOutput $text
-          }
-          Trace 'llama.server.resp' @{ len=$text.Length }
-          if ($text) { Log-AIOutput -Kind 'llama.server.chat' -Model 'echo' -Text $text -PromptFile $null }
-          return @{ ok=$true; text=$text; model='llama.server' }
-        } else {
-          return @{ ok=$false; error=$res.error; text='(llama-server unavailable)'; model='llama.server' }
-        }
-      } catch {
-        return @{ ok=$false; error=$_.Exception.Message; text='(llama-server error)'; model='llama.server' }
-      }
-    }  
-
-    # Default: Ollama REST
-    $sys = Build-SystemPrompt
-    # Add steering to avoid bland acks and keep answers concrete
-    $sys_addendum = @'
-Rules:
-- Never reply with only "Okay." or other one-word acknowledgements.
-- Provide a short, concrete answer or one clarifying question.
-- Keep replies to 1 to 2 sentences unless asked for detail.
-'@
-    if ($sys) { $sys = ($sys.Trim() + "`n`n" + $sys_addendum) }
-    $apiHost = $env:OLLAMA_HOST.TrimEnd('/')
-    $uri = "$apiHost/api/chat"
-    
-    # Build messages
-    $messages = @(@{ role='system'; content=$sys })
-    # Filter history: drop trivial assistant acks like "Okay."
-    $hist = @()
-    foreach ($m in $ConversationHistory) {
-      if (-not ($m -and $m.role -and $m.content)) { continue }
-      $role = ("" + $m.role)
-      $content = Sanitize-String ("" + $m.content)
-      if ($role -match '^(?i)assistant$' -and $content -match '^(?i)\s*ok(ay)?[.!?\s]*$') { continue }
-      if ($role -match '^(?i)(user|assistant|system)$') { $hist += @{ role=$role.ToLower(); content=$content } }
+    $content = New-Object System.Net.Http.StringContent($Json, [System.Text.Encoding]::UTF8, 'application/json')
+    $resp = $client.PostAsync($Uri, $content).Result
+    $txt  = $resp.Content.ReadAsStringAsync().Result
+    if (-not $resp.IsSuccessStatusCode) {
+      throw ("HTTP {0}: {1}" -f [int]$resp.StatusCode, $txt)
     }
-    if ($hist.Count -gt 0) { $messages += $hist }
-    if ($UserText) {
-      $messages += @{ role='user'; content=(Sanitize-String $UserText) }
+    return $txt
+  } finally {
+    try { $content.Dispose() } catch {}
+    try { $client.Dispose()  } catch {}
+    try { $handler.Dispose() } catch {}
+  }
+}
+
+function Send-OllamaChat {
+  param(
+    [string]$UserText,
+    [array] $ConversationHistory,
+    [string]$Model = $env:ECHO_LLAMA_MODEL  # 'echo'
+  )
+
+  try {
+    # Build a simple prompt (history optional; keep it minimal while debugging)
+    $prompt = $UserText
+    if (-not $prompt -or -not $prompt.Trim()) { $prompt = 'Say "pong" once.' }
+
+    # Use /completion directly (Gemma-2B responds instantly here)
+    $base = if ($env:ECHO_LLAMA_SERVER -and $env:ECHO_LLAMA_SERVER.Trim()) { $env:ECHO_LLAMA_SERVER } else { 'http://127.0.0.1:8080/v1' }
+    $legacyBase = $base -replace '/v1$',''
+    $uri = ($legacyBase.TrimEnd('/') + '/completion')
+
+    $bodyObj = @{
+      prompt      = $prompt
+      n_predict   = 128
+      temperature = 0.7
     }
-    
-    $body = @{
-      model = $Model
-      stream = $false
-      messages = $messages
+    $json = $bodyObj | ConvertTo-Json -Depth 8
+
+    # POST with a hard timeout so it cannot hang
+    $raw = Post-JsonHttpClient -Uri $uri -Json $json -TimeoutSec 20
+    $resp = $null
+    try { $resp = $raw | ConvertFrom-Json } catch { throw ("Bad JSON from server: " + $raw.Substring(0, [Math]::Min($raw.Length, 300))) }
+
+    if ($resp -and $resp.content) {
+      $text = ("" + $resp.content).Trim()
+      return @{ ok = ($text.Length -gt 0); text = $text; path = 'completion' }
     }
 
-    # Debug snapshot of the messages sent to Ollama
-    Write-LastChatDebug -Mode 'ollama' -Model $Model -Messages $messages -SystemPrompt $sys
-    
-    try {
-      $json = $body | ConvertTo-Json -Depth 20 -Compress
-      $t0 = Get-Date
-      Trace 'ollama.req' @{ model=$Model; msgCount=$messages.Count }
-      
-      $resp = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $json -TimeoutSec 90 -ErrorAction Stop
-      
-      $text = ''
-      if ($resp -and $resp.message -and $resp.message.content) {
-        $text = [string]$resp.message.content
-      }
-      $ms = [int]((Get-Date) - $t0).TotalMilliseconds
-      # Sanitize common stop markers
-      if ($text) {
-        $text = ($text -replace '(?i)\s*\[end of text\]\s*$', '')
-        $text = ($text -replace '(?i)\s*<\|im_end\|>\s*$', '')
-        $text = ($text -replace '(?i)\s*</s>\s*$', '')
-      }
-      $text = Clean-AssistantOutput $text
-      Trace 'ollama.resp' @{ len=$text.Length; ms=$ms; model=$Model }
-      if ($text) { Log-AIOutput -Kind 'ollama.chat' -Model $Model -Text $text -PromptFile $null }
-      return @{ ok=$true; text=$text; model=$Model }
-    } catch {
-      $ms = [int]((Get-Date) - $t0).TotalMilliseconds
-      Trace 'ollama.err' @{ error=$_.Exception.Message; ms=$ms; model=$Model }
-      return @{ ok=$false; error=$_.Exception.Message; text='(Ollama unavailable)'; model=$Model }
-    }
-  } catch {
-    # mark down for 2 minutes
-    $script:OllamaDownUntil = (Get-Date).AddMinutes(2)
-    try { return Use-LocalLlama -UserText $UserText -ConversationHistory $ConversationHistory } catch {}
-    return @{ ok=$false; error=$_.Exception.Message }
-  } 
+    return @{ ok = $false; error = 'No content from /completion'; path = 'completion' }
+  }
+  catch {
+    $msg = if ($_.Exception -and $_.Exception.Message) { $_.Exception.Message } else { "" + $_ }
+    return @{ ok = $false; error = $msg; path = 'error' }
+  }
 }
 
 function Use-LocalLlama {
@@ -2777,22 +2903,35 @@ function Run-AgenticLoop {
 # Inbox Queue
 # ---------------------------
 function Get-NextInboxMessage {
-  $next = Get-ChildItem -LiteralPath $INBOX_Q -File -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -First 1
-  if (-not $next) { return $null }
-  
-  $text = ''
-  try { $text = Read-TextUtf8NoBom -Path $next.FullName } catch { $text = '' }
-  
-  # Check if this is an IM suggestion (filename ends with _im.txt)
-  $isIMSuggestion = $next.Name -like '*_im.txt'
-  
-  try { Remove-Item -LiteralPath $next.FullName -Force -ErrorAction SilentlyContinue } catch { }
-  
-  if (-not $text) { return $null }
-  
-  return @{
-    text = $text.Trim()
-    isIMSuggestion = $isIMSuggestion
+  try {
+    if (-not (Test-Path -LiteralPath $INBOX_Q)) {
+      # Try to create once, else skip this tick gracefully
+      try { New-Item -ItemType Directory -Force -Path $INBOX_Q | Out-Null }
+      catch { Trace 'inbox.err' "Cannot create inbox dir: $INBOX_Q"; return $null }
+    }
+
+    $files = Get-ChildItem -LiteralPath $INBOX_Q -File -ErrorAction Stop |
+             Sort-Object LastWriteTime |
+             Select-Object -First 1
+    if (-not $files) { return $null }
+
+    $f = $files[0]
+    $raw = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction Stop
+    Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+
+    $obj = $null
+    try { $obj = $raw | ConvertFrom-Json -ErrorAction Stop } catch {}
+    if ($obj -and $obj.text) {
+      return @{
+        text            = [string]$obj.text
+        isIMSuggestion  = [bool]($obj.isIMSuggestion -or $obj.is_im -or $obj.kind -eq 'im')
+      }
+    } else {
+      return @{ text = [string]$raw; isIMSuggestion = $false }
+    }
+  } catch {
+    Trace 'inbox.err' $_.Exception.Message
+    return $null
   }
 }
 
@@ -2921,9 +3060,9 @@ Rules:
         if ($env:ECHO_ROUTER_LLAMACPP_MODEL -and (Test-Path -LiteralPath $env:ECHO_ROUTER_LLAMACPP_MODEL)) { $env:ECHO_ROUTER_LLAMACPP_MODEL }
         else {
           $cand = @(
+            (Join-Path (Get-EchoHome) 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'),
             (Join-Path (Get-EchoHome) 'models\Nidum-Limitless-Gemma-2B-Q4_K_M.gguf'),
             (Join-Path (Get-EchoHome) 'models\nidum-Nidum-Gemma-2B-Uncensored-Q2_K.gguf'),
-            (Join-Path (Get-EchoHome) 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'),
             (Join-Path (Get-EchoHome) 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf')
           ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           $cand
@@ -2961,40 +3100,88 @@ function Write-InterruptDecision {
 
 function Start-InterruptController {
   param(
-    [string]$Model = $(if ($env:ECHO_IM_MODEL) { $env:ECHO_IM_MODEL } else { 'qwen2.5:3b' }),
-    [string]$Inbox  = $(Join-Path (Get-EchoHome) 'ui\inboxq'),
-    [string]$Outbox = $(Join-Path (Get-EchoHome) 'ui\outbox.jsonl'),
-    [string]$Logs   = $(Join-Path (Get-EchoHome) 'logs'),
-    [int]$ThrottleMs = 1500
+    [string]$Inbox        = (Join-Path $HOME_DIR 'ui\inboxq'),
+    [int]   $PollMs       = 1000,
+    [int]   $MaxChars     = 300,
+    [double]$Threshold    = 0.35
   )
-  if (-not (Test-Path -LiteralPath $Inbox)) { return }
-  if (-not (Test-Path -LiteralPath $Logs)) { New-Item -ItemType Directory -Force -Path $Logs | Out-Null }
 
-  Start-Job -Name 'Echo.Interruptor' -ScriptBlock {
-    param($Model, $Inbox, $Outbox, $Logs, $ThrottleMs)
+  try { New-Item -ItemType Directory -Force -Path $Inbox | Out-Null } catch {}
+
+  # Avoid starting twice
+  $existing = Get-Job -Name 'Echo.Interruptor' -ErrorAction SilentlyContinue
+  if ($existing -and $existing.State -in 'Running','NotStarted') { return }
+
+  # Background poller (simple & PS5.1-safe)
+  Start-Job -Name 'Echo.Interruptor' -ArgumentList @(
+      $Inbox, $PollMs, $MaxChars, $Threshold, $Logs
+  ) -ScriptBlock {
+    param($Inbox, $PollMs, $MaxChars, $Threshold, $Logs)
+
+    $ErrorActionPreference = 'SilentlyContinue'
+    $lastSeen = @{ Path = $null; WriteTime = [datetime]::MinValue; Length = -1 }
+
+    $logFile = Join-Path $Logs ("interruptor-{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
+    function WLog($m){ try { "[{0:HH:mm:ss}] {1}" -f (Get-Date), $m | Add-Content -LiteralPath $logFile -Encoding UTF8 } catch {} }
+
     while ($true) {
       try {
-        $files = Get-ChildItem -LiteralPath $Inbox -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
-        if ($files) {
-          $content = Get-Content -LiteralPath $files.FullName -Raw -Encoding UTF8
-          $decision = Should-Interrupt -UserText $content -Model $Model
-          Write-InterruptDecision -Decision $decision -InboxPath $Inbox -OutboxPath $Outbox
-          if ($decision.interrupt -and $decision.route -eq 'quick') {
-            # Write a tiny "typing" ack so the UI shows activity
-            $ack = @{
-              ts=(Get-Date).ToString('o')
-              kind='assistant'
-              text='(handling quickly...)'
-            } | ConvertTo-Json -Compress
-            if ($Outbox) { Add-Content -LiteralPath $Outbox -Value $ack -Encoding UTF8 }
+        # include .txt, .json, .jsonl
+        $files = Get-ChildItem -LiteralPath $Inbox -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Extension -in '.txt','.json','.jsonl' } |
+                 Sort-Object LastWriteTime
+
+        if ($files.Count -gt 0) {
+          $f = $files[-1]  # newest by write time
+
+          # skip if nothing new
+          if ($f.FullName -ne $lastSeen.Path -or
+              $f.LastWriteTime -gt $lastSeen.WriteTime -or
+              $f.Length -ne $lastSeen.Length) {
+
+            # best-effort open while writer still has handle
+            $raw = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction Stop
+
+            # If JSON, try to pull a text-ish field; else treat as plain text
+            $userText = $null
+            if ($f.Extension -in '.json','.jsonl') {
+              try {
+                $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+                if ($obj -ne $null) {
+                  if ($obj.PSObject.Properties.Match('text').Count)    { $userText = [string]$obj.text }
+                  elseif ($obj.PSObject.Properties.Match('prompt').Count) { $userText = [string]$obj.prompt }
+                  elseif ($obj.PSObject.Properties.Match('content').Count){ $userText = [string]$obj.content }
+                }
+              } catch { }
+            }
+            if (-not $userText) { $userText = [string]$raw }
+
+            # trim to router budget
+            if ($userText.Length -gt $MaxChars) { $userText = $userText.Substring(0, $MaxChars) }
+
+            # Route: quick/defer/cancel with interrupt true/false
+            $dec = Should-Interrupt -UserText $userText -Model 'router' -TimeoutSec 12
+            if ($dec -and $dec.interrupt -and $dec.priority -ge $Threshold) {
+              WLog ("INTERRUPT: {0} | route={1} pr={2}" -f ($userText.Replace("`r"," ").Replace("`n"," ")), $dec.route, $dec.priority)
+              Write-InterruptDecision -Decision $dec -SourcePath $f.FullName
+            } else {
+              WLog ("defer: {0}" -f ($userText.Replace("`r"," ").Replace("`n"," ")))
+            }
+
+            # update last seen
+            $lastSeen.Path      = $f.FullName
+            $lastSeen.WriteTime = $f.LastWriteTime
+            $lastSeen.Length    = $f.Length
           }
         }
-      } catch {}
-      Start-Sleep -Milliseconds $ThrottleMs
-    }
-  } -ArgumentList $Model, $Inbox, $Outbox, $Logs, $ThrottleMs | Out-Null
-}
+      } catch {
+        WLog ("err: " + $_.Exception.Message)
+      }
 
+      Start-Sleep -Milliseconds $PollMs
+    }
+  } | Out-Null
+}
 
 # Auto-start interruptor (if not running)
 try {

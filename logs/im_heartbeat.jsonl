@@ -1,0 +1,21 @@
+{"err_detail":null,"ts":"2025-11-07T00:01:51.089Z","ctx_ok":true,"idle_sec":60.6,"phase":"heartbeat","circuit":false,"tick":0,"pid":14044,"err":null,"active":"(2708) I made a Pokemon Adventure RPG and trapped 3 YouTubers inside - YouTube - Google Chrome"}
+{"err_detail":null,"ts":"2025-11-07T00:02:18.866Z","ctx_ok":true,"idle_sec":162.3,"phase":"heartbeat","circuit":false,"tick":1,"pid":14044,"err":null,"active":"(2708) I made a Pokemon Adventure RPG and trapped 3 YouTubers inside - YouTube - Google Chrome"}
+{"err_detail":null,"ts":"2025-11-07T00:02:31.751Z","ctx_ok":true,"idle_sec":0.5,"phase":"heartbeat","circuit":false,"tick":2,"pid":14300,"err":null,"active":"ai_simple_2025-11-06_19-01-52 - Notepad"}
+{"err_detail":null,"ts":"2025-11-07T00:02:44.732Z","ctx_ok":true,"idle_sec":5.1,"phase":"heartbeat","circuit":false,"tick":3,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:02:57.155Z","ctx_ok":true,"idle_sec":18.4,"phase":"heartbeat","circuit":false,"tick":4,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:03:10.076Z","ctx_ok":true,"idle_sec":30.7,"phase":"heartbeat","circuit":false,"tick":5,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:03:22.197Z","ctx_ok":true,"idle_sec":43.8,"phase":"heartbeat","circuit":false,"tick":6,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:03:35.490Z","ctx_ok":true,"idle_sec":55.6,"phase":"heartbeat","circuit":false,"tick":7,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:03:48.028Z","ctx_ok":true,"idle_sec":69.1,"phase":"heartbeat","circuit":false,"tick":8,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:04:00.375Z","ctx_ok":true,"idle_sec":81.4,"phase":"heartbeat","circuit":false,"tick":9,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:04:13.827Z","ctx_ok":true,"idle_sec":94,"phase":"heartbeat","circuit":false,"tick":10,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:04:25.693Z","ctx_ok":true,"idle_sec":107.2,"phase":"heartbeat","circuit":false,"tick":11,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:04:38.937Z","ctx_ok":true,"idle_sec":119.4,"phase":"heartbeat","circuit":false,"tick":12,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:04:54.587Z","ctx_ok":true,"idle_sec":132.7,"phase":"heartbeat","circuit":false,"tick":13,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:05:41.741Z","ctx_ok":true,"idle_sec":1.9,"phase":"heartbeat","circuit":false,"tick":14,"pid":14044,"err":null,"active":"(2708) I made a Pokemon Adventure RPG and trapped 3 YouTubers inside - YouTube - Google Chrome"}
+{"err_detail":null,"ts":"2025-11-07T00:09:23.313Z","ctx_ok":true,"idle_sec":36.7,"phase":"heartbeat","circuit":false,"tick":15,"pid":5816,"err":null,"active":"logs"}
+{"err_detail":null,"ts":"2025-11-07T00:14:27.747Z","ctx_ok":true,"idle_sec":61.1,"phase":"heartbeat","circuit":false,"tick":16,"pid":29484,"err":null,"active":"visionlite.events.jsonl - Echo - Visual Studio Code"}
+{"err_detail":null,"ts":"2025-11-07T00:17:42.418Z","ctx_ok":true,"idle_sec":218.9,"phase":"heartbeat","circuit":false,"tick":17,"pid":14044,"err":null,"active":"(2708) I made a Pokemon Adventure RPG and trapped 3 YouTubers inside - YouTube - Google Chrome"}
+{"err_detail":null,"ts":"2025-11-07T00:18:51.528Z","ctx_ok":true,"idle_sec":55.6,"phase":"heartbeat","circuit":false,"tick":18,"pid":29484,"err":null,"active":"agent.trace.jsonl - Echo - Visual Studio Code"}
+{"err_detail":null,"ts":"2025-11-07T00:21:14.832Z","ctx_ok":true,"idle_sec":0,"phase":"heartbeat","circuit":false,"tick":19,"pid":29484,"err":null,"active":"im_heartbeat.jsonl - Echo - Visual Studio Code"}
+{"err_detail":null,"ts":"2025-11-07T00:22:15.805Z","ctx_ok":true,"idle_sec":107.1,"phase":"heartbeat","circuit":false,"tick":20,"pid":29484,"err":null,"active":"im_heartbeat.jsonl - Echo - Visual Studio Code"}

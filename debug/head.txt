@@ -1,0 +1,60 @@
+<#  Start-EchoAll.ps1 — lean launcher for 4 processes
+    - Start-Echo.ps1
+    - Start-IM.ps1
+    - Start-EchoRoom.ps1
+    - tools\Start-VisionProbe-Lite.ps1
+#>
+
+# ---------- strict-ish ----------
+$ErrorActionPreference = 'Stop'
+
+# Import core modules ONCE (parent only)
+# If these aren't available for any reason, we still fall back to .NET where possible.
+Import-Module Microsoft.PowerShell.Management   -ErrorAction SilentlyContinue
+Import-Module Microsoft.PowerShell.Utility      -ErrorAction SilentlyContinue
+
+# ---------- tiny logger ----------
+function Write-Info ([string]$msg) { [Console]::WriteLine("[EchoAll] {0}"      -f $msg) }
+function Write-Warn ([string]$msg) { [Console]::WriteLine("[EchoAll][WARN] {0}" -f $msg) }
+function Write-Err  ([string]$msg) { [Console]::WriteLine("[EchoAll][ERR]  {0}" -f $msg) }
+
+# ---------- helpers ----------
+function Assert-PathExists([string]$Path, [string]$Kind) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw ("Missing {0}: {1}" -f $Kind, $Path)
+    }
+}
+
+# Start a child PS (prefers PS7), imports core modules in the CHILD, logs to ./logs
+function Start-DetachedChild {
+    param(
+        [Parameter(Mandatory)][string]$File,
+        [string]$Args = '',
+        [string]$Name = ''
+    )
+
+    # pick shell
+    $ps7  = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+    if (Test-Path -LiteralPath $ps7) { $psExe = $ps7 }
+    else { $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+
+    # logs folder
+    if (-not (Test-Path -LiteralPath $script:logs)) {
+        New-Item -ItemType Directory -Force -Path $script:logs | Out-Null
+    }
+    $ts = (Get-Date).ToString('yyyyMMdd_HHmmss')
+    if ($Name -and $Name.Trim().Length -gt 0) { $prefix = $Name } else { $prefix = 'child' }
+    $outLog = Join-Path $script:logs ("{0}-{1}.out.log" -f $prefix, $ts)
+    $errLog = Join-Path $script:logs ("{0}-{1}.err.log" -f $prefix, $ts)
+
+    # safe quoting
+    $fileEsc = $File.Replace("'", "''")
+    $cmd = "Import-Module Microsoft.PowerShell.Utility,Microsoft.PowerShell.Management; & '$fileEsc' $Args"
+
+    $p = Start-Process -FilePath $psExe `
+        -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-NonInteractive','-Command', $cmd) `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $outLog `
+        -RedirectStandardError  $errLog `
+        -PassThru
+

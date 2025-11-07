@@ -1,0 +1,3 @@
+# Ollama request timeout (seconds) – quick failover to llama.cpp
+$OllamaTimeoutSec = 20
+try { if ($env:ECHO_VISION_OLLAMA_TIMEOUT -and $env:ECHO_VISION_OLLAMA_TIMEOUT.Trim()) { $OllamaTimeoutSec = [int]$env:ECHO_VISION

@@ -6,8 +6,8 @@ param(
   # inference params
   [int]$CtxSize   = 2048,
   [int]$NPredict  = 192,
-  [int]$Threads   = 3,
-  [int]$GpuLayers = 24,     # 24 for 2B; 100 = as many as possible
+  [int]$Threads   = 1,
+  [int]$GpuLayers = 100,    # 24 for 2B; 100 = as many as possible
   [int]$Batch     = 512,
   [int]$UBatch    = 0,      # only used if llama-cli -h shows -ub/--ubatch-size
 
@@ -19,6 +19,24 @@ $exe = 'D:\llama-cpp\llama-cli.exe'
 
 if (-not (Test-Path -LiteralPath $exe))       { throw "llama-cli.exe not found at $exe" }
 if (-not (Test-Path -LiteralPath $ModelPath)) { throw "Model not found: $ModelPath" }
+
+# Optional env overrides for GPU layers
+try {
+  if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) {
+    $GpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS
+  } elseif ($Role -eq 'IM' -and $env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) {
+    $GpuLayers = [int]$env:ECHO_IM_GPU_LAYERS
+  }
+} catch {}
+
+# Optional env overrides for threads
+try {
+  if ($Role -eq 'IM' -and $env:ECHO_IM_THREADS -and $env:ECHO_IM_THREADS.Trim()) {
+    $Threads = [int]$env:ECHO_IM_THREADS
+  } elseif ($env:ECHO_LLAMA_THREADS -and $env:ECHO_LLAMA_THREADS.Trim()) {
+    $Threads = [int]$env:ECHO_LLAMA_THREADS
+  }
+} catch {}
 
 # --- folders / setup ---
 function Ensure-Dir([string]$p){

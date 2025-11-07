@@ -1,0 +1,8 @@
+{
+    "goal":  "Respond conversationally",
+    "simple_response":  true,
+    "completion":  {
+                       "mode":  "speak",
+                       "template":  "{{user_request}} I\u0027m here to help with any questions you might have, not just about Pokemon."
+                   }
+}

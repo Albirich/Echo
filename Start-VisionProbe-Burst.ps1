@@ -65,7 +65,7 @@ else {
 $Threads    = 0; try { if ($env:ECHO_VISION_THREADS -and $env:ECHO_VISION_THREADS.Trim()) { $Threads = [int]$env:ECHO_VISION_THREADS } } catch {}
 $NPredict   = 160; try { if ($env:ECHO_VISION_NPREDICT -and $env:ECHO_VISION_NPREDICT.Trim()) { $NPredict = [int]$env:ECHO_VISION_NPREDICT } } catch {}
 $CtxSize    = 1536; try { if ($env:ECHO_VISION_CTX -and $env:ECHO_VISION_CTX.Trim()) { $CtxSize = [int]$env:ECHO_VISION_CTX } } catch {}
-$GpuLayers  = 35; try { if ($env:ECHO_VISION_GPU_LAYERS -and $env:ECHO_VISION_GPU_LAYERS.Trim()) { $GpuLayers = [int]$env:ECHO_VISION_GPU_LAYERS } } catch {}
+$GpuLayers  = 100; try { if ($env:ECHO_VISION_GPU_LAYERS -and $env:ECHO_VISION_GPU_LAYERS.Trim()) { $GpuLayers = [int]$env:ECHO_VISION_GPU_LAYERS } } catch {}
 $MaxSentences = 3; try { if ($env:ECHO_VISION_SENTENCES -and $env:ECHO_VISION_SENTENCES.Trim()) { $MaxSentences = [int]$env:ECHO_VISION_SENTENCES } } catch {}
 $MaxChars     = 700; try { if ($env:ECHO_VISION_MAX_CHARS -and $env:ECHO_VISION_MAX_CHARS.Trim()) { $MaxChars = [int]$env:ECHO_VISION_MAX_CHARS } } catch {}
 

@@ -33,16 +33,28 @@ $pidFiles = @(
 )
 Kill-PidsFromFiles $pidFiles
 
+# Ensure core cmdlets exist even if parent toggled autoloading
+$PSModuleAutoLoadingPreference = 'All'
+Import-Module Microsoft.PowerShell.Utility, Microsoft.PowerShell.Management -ErrorAction SilentlyContinue
+
+# Prefer .NET for timestamps (avoids Get-Date entirely)
+$script:TS = [datetime]::Now.ToString('yyyyMMdd_HHmmss')
+
 Write-Verbose "[StopEcho] Killing common stragglers by name..."
 # llama.cpp + Ollama + helpers
-Get-Process -Name 'llama-cli','llama-mtmd-cli','llama-server','rpc-server','ollama','ollama.exe','ollama_rocm' `
+Get-Process -Name 'llama-cli','llama-mtmd-cli','llama-server','rpc-server','ollama','ollama.exe','ollama_rocm' -ErrorAction SilentlyContinue `
   | Stop-Process -Force:$Force
+
+# llama.cpp server sometimes builds as generic 'server.exe'; scope to llama-cpp path/args
+Get-CimInstance Win32_Process -Filter "Name='server.exe' OR Name='server' OR Name='llama-server.exe' OR Name='llama-server'" `
+  | Where-Object { $_.ExecutablePath -match '(?i)llama-cpp' -or $_.CommandLine -match '(?i)llama(-|\s)?server' } `
+  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force:$Force }
 # whisper stream variants (whisper.cpp stream.exe or custom whisper-stream.exe)
 Get-Process -Name 'stream','stream.exe','whisper-stream','whisper-stream.exe' -ErrorAction SilentlyContinue `
   | Stop-Process -Force:$Force
 # any powershells that were launched to run the sub-scripts directly
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" `
-  | Where-Object { $_.CommandLine -match 'Start-(EchoAll|Echo|IM|Echoroom|VisionProbe|WhisperStreamToInbox).*\.ps1' } `
+  | Where-Object { $_.CommandLine -match 'Start-(EchoAll|Echo|IM|Echoroom|VisionProbe|WhisperStreamToInbox|LlamaServer).*\.ps1' } `
   | ForEach-Object { Stop-Process -Id $_.ProcessId -Force:$Force }
 
 Write-Verbose "[StopEcho] Ensuring Start-IM is terminated..."
@@ -65,10 +77,15 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'"
   | Where-Object { $_.CommandLine -match 'Start-EchoAll\.ps1' } `
   | ForEach-Object { Stop-Process -Id $_.ProcessId -Force:$Force }
 
-# 3) last-ditch: kill consoles that still have our banner
-Get-Process | Where-Object {
-  $_.MainWindowTitle -match 'Echo minimal stack launched|EchoAll'
-} | Stop-Process -Force:$Force
+# 3) last-ditch: narrow match to console hosts only and avoid editors
+# VS Code can include "Start-EchoAll.ps1" in its window title; do not kill it.
+Get-Process -ErrorAction SilentlyContinue |
+  Where-Object {
+    ($_.Name -match '^(?i)(cmd|powershell|pwsh)$') -and 
+    ($_.MainWindowTitle -match '^(?i)(Echo minimal stack launched|EchoAll)') -and 
+    ($_.Name -notmatch '^(?i)Code( - Insiders)?$')
+  } |
+  Stop-Process -Force:$Force
 
 Write-Verbose "[StopEcho] Closing Echo Room (Electron) UI..."
 # Kill Electron window by title (title set in renderer/index.html)
