@@ -1,4 +1,5 @@
-﻿# Start-EchoAll.ps1 — PS 5.1 compatible launcher
+# Start-EchoAll.ps1 - PS 5.1 compatible launcher
+#  OPTIMIZED: GPU-first, llama-server auto-start
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 $InformationPreference = 'SilentlyContinue'
@@ -19,7 +20,6 @@ function Write-Err ([string]$msg) { [Console]::WriteLine("[EchoAll][ERR]  {0}" -
 function Assert-Path([string]$Path,[string]$Kind) {
   if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
     throw ("Missing {0}: {1}" -f $Kind, $Path)
-    # or: throw "Missing ${Kind}: ${Path}"
   }
 }
 
@@ -31,7 +31,6 @@ function Join-Home([string]$rel) {
 try {
   $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 } catch {
-  # Fall back to the current working directory without relying on Get-Location
   $scriptDir = [System.IO.Directory]::GetCurrentDirectory()
 }
 if (-not $env:ECHO_HOME -or -not (Test-Path -LiteralPath $env:ECHO_HOME)) { $env:ECHO_HOME = $scriptDir }
@@ -50,17 +49,19 @@ $hostFlag = Join-Home 'state\host.flag'
 $env:ECHO_HOST_FLAG = $hostFlag
 if (-not (Test-Path -LiteralPath $hostFlag)) { [IO.File]::WriteAllText($hostFlag,'ok',[Text.UTF8Encoding]::new($false)) }
 
-# ---- model selection (unified to Noromaid 7B) ----
-$noromaid = Join-Home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
-$altGemma = Join-Home 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
+# ---- model selection (prefer DarkIdol L3.1 8B Q8, then Mistral Q5, then Noromaid Q5/Q4, then Gemma) ----
+$darkIdol   = Join-Home 'models\L3.1-DpHermes-Rsnng-8B-DarkIdol-Inst-1.2-Uncen-D_AU-Q8_0.gguf'
+$mistralQ5  = Join-Home 'models\mistral-7b-uncensored\mistral-7b-uncensored-Q5_K_M.gguf'
+$noromaidQ5 = Join-Home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q5_K_M.gguf'
+$noromaidQ4 = Join-Home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
+$altGemma   = Join-Home 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
 
-if (Test-Path -LiteralPath $noromaid) {
-  $env:ECHO_LLAMACPP_MODEL = $noromaid
-} elseif (Test-Path -LiteralPath $altGemma) {
-  $env:ECHO_LLAMACPP_MODEL = $altGemma
-} else {
-  Remove-Item Env:ECHO_LLAMACPP_MODEL -ErrorAction SilentlyContinue
-}
+if     (Test-Path -LiteralPath $darkIdol)   { $env:ECHO_LLAMACPP_MODEL = $darkIdol }
+elseif (Test-Path -LiteralPath $mistralQ5)  { $env:ECHO_LLAMACPP_MODEL = $mistralQ5 }
+elseif (Test-Path -LiteralPath $noromaidQ5) { $env:ECHO_LLAMACPP_MODEL = $noromaidQ5 }
+elseif (Test-Path -LiteralPath $noromaidQ4) { $env:ECHO_LLAMACPP_MODEL = $noromaidQ4 }
+elseif (Test-Path -LiteralPath $altGemma)   { $env:ECHO_LLAMACPP_MODEL = $altGemma }
+else { Remove-Item Env:ECHO_LLAMACPP_MODEL -ErrorAction SilentlyContinue }
 
 if ($env:ECHO_LLAMACPP_MODEL) { Write-Info ("Chat model: {0}" -f $env:ECHO_LLAMACPP_MODEL) } else { Write-Info "Chat model: (auto)" }
 $env:ECHO_ROUTER_LLAMACPP_MODEL = $env:ECHO_LLAMACPP_MODEL
@@ -74,23 +75,149 @@ if ($env:ECHO_IM_LLAMACPP_MODEL) {
   Write-Info ("Forcing all models to IM model: {0}" -f $env:ECHO_IM_LLAMACPP_MODEL)
 }
 
-# ---- low-CPU defaults for llama.cpp bits ----
-$env:ECHO_LLAMA_THREADS     = '1'
-$env:ECHO_LLAMA_BATCH       = '512'
-$env:ECHO_LLAMA_UBATCH      = '128'
+# ----  OPTIMIZED: GPU-first defaults for llama.cpp ----
+$env:ECHO_LLAMA_THREADS     = '4'     #  Was: 1 -> Now: 4 (optimal for GPU)
+$env:ECHO_LLAMA_BATCH       = '2048'  #  Was: 512 -> Now: 2048 (better GPU saturation)
+$env:ECHO_LLAMA_UBATCH      = '512'   #  Was: 128 -> Now: 512 (parallel processing)
 $env:ECHO_LLAMA_MAIN_GPU    = '0'
-$env:ECHO_LLAMA_GPU_LAYERS  = '100'
-if (-not $env:ECHO_IM_THREADS      -or [string]::IsNullOrWhiteSpace($env:ECHO_IM_THREADS))      { $env:ECHO_IM_THREADS      = '1' }
-if (-not $env:ECHO_VISION_THREADS  -or [string]::IsNullOrWhiteSpace($env:ECHO_VISION_THREADS))  { $env:ECHO_VISION_THREADS  = '1' }
+$env:ECHO_LLAMA_GPU_LAYERS  = '999'   #  Was: 100 -> Now: 999 (full GPU offload)
+if (-not $env:ECHO_IM_THREADS      -or [string]::IsNullOrWhiteSpace($env:ECHO_IM_THREADS))      { $env:ECHO_IM_THREADS      = '4' }  #  Was: 1
+if (-not $env:ECHO_VISION_THREADS  -or [string]::IsNullOrWhiteSpace($env:ECHO_VISION_THREADS))  { $env:ECHO_VISION_THREADS  = '4' }  #  Was: 1
 
-# server hints (harmless if unused)
-if (-not $env:ECHO_LLAMA_SERVER -or -not $env:ECHO_LLAMA_SERVER.Trim()) { $env:ECHO_LLAMA_SERVER = "http://127.0.0.1:8080/v1" }
+# server hints
+if (-not $env:ECHO_LLAMA_SERVER -or -not $env:ECHO_LLAMA_SERVER.Trim()) { $env:ECHO_LLAMA_SERVER = "http://127.0.0.1:8080" }  #  Fixed path (was /v1)
 if (-not $env:ECHO_LLAMA_MODEL  -or -not $env:ECHO_LLAMA_MODEL.Trim())  { $env:ECHO_LLAMA_MODEL  = "echo" }
+
+Write-Info ("GPU Config: Threads={0}, Batch={1}, UBatch={2}, GPU_Layers={3}" -f $env:ECHO_LLAMA_THREADS, $env:ECHO_LLAMA_BATCH, $env:ECHO_LLAMA_UBATCH, $env:ECHO_LLAMA_GPU_LAYERS)
+
+# ----  llama-server startup (like Ollama) ----
+function Test-LlamaServerReady {
+  param([string]$ServerUrl)
+  try {
+    if (-not $ServerUrl -or [string]::IsNullOrWhiteSpace($ServerUrl)) { $ServerUrl = 'http://127.0.0.1:8080' }
+    $uri = ($ServerUrl.TrimEnd('/')) + '/health'
+    $null = Invoke-RestMethod -Method Get -Uri $uri -TimeoutSec 2 -ErrorAction Stop
+    return $true
+  } catch { return $false }
+}
+
+function Find-LlamaServerExe {
+  # Look in common locations
+  $candidates = @(
+    'D:\llama-cpp\llama-server.exe',
+    'C:\llama-cpp\llama-server.exe',
+    [IO.Path]::Combine($env:LOCALAPPDATA,'llama.cpp','llama-server.exe'),
+    [IO.Path]::Combine($env:ProgramFiles,'llama.cpp','llama-server.exe'),
+    (Join-Home 'bin\llama-server.exe'),
+    (Join-Home 'llama-server.exe')
+  )
+  
+  foreach ($exe in $candidates) {
+    if (Test-Path -LiteralPath $exe) { return $exe }
+  }
+  return $null
+}
+
+function Ensure-LlamaServer {
+  param([string]$ServerUrl, [string]$ModelPath)
+  
+  if (-not $ServerUrl) { $ServerUrl = 'http://127.0.0.1:8080' }
+  
+  # Check if already running
+  if (Test-LlamaServerReady -ServerUrl $ServerUrl) { 
+    Write-Info ("llama-server ready at {0}" -f $ServerUrl)
+    return $true 
+  }
+  
+  Write-Info "llama-server not running, attempting to start..."
+  
+  # Find executable
+  $exe = Find-LlamaServerExe
+  if (-not $exe) {
+    Write-Warn "llama-server.exe not found in common locations. Please start it manually:"
+    Write-Warn "  .\tools\Start-LlamaServer.ps1 -ModelPath 'model.gguf' -Threads 4 -Ngl 999"
+    return $false
+  }
+  
+  # Find model
+  if (-not $ModelPath -or -not (Test-Path -LiteralPath $ModelPath)) {
+    $ModelPath = $env:ECHO_LLAMACPP_MODEL
+  }
+  if (-not $ModelPath -or -not (Test-Path -LiteralPath $ModelPath)) {
+    Write-Warn "No model file found. llama-server needs a model path."
+    Write-Warn "Set ECHO_LLAMACPP_MODEL or ensure model exists in models\ directory"
+    return $false
+  }
+  
+  Write-Info ("Starting llama-server with model: {0}" -f $ModelPath)
+  
+  # Build arguments
+  $args = @(
+    '-m', $ModelPath,
+    '-ngl', $env:ECHO_LLAMA_GPU_LAYERS,
+    '-t', $env:ECHO_LLAMA_THREADS,
+    '-tb', $env:ECHO_LLAMA_THREADS,
+    '-b', $env:ECHO_LLAMA_BATCH,
+    '-c', '4096',
+    '--host', '127.0.0.1',
+    '--port', '8080',
+    '--cache-ram', '2048'
+  )
+  
+  # Add ubatch if supported (optional)
+  if ($env:ECHO_LLAMA_UBATCH) {
+    $args += @('-ub', $env:ECHO_LLAMA_UBATCH)
+  }
+  
+  # Start server
+  try {
+    $logFile = Join-Home ('logs\llama-server-{0}.log' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    $errFile = Join-Home ('logs\llama-server-{0}.err.log' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    
+    $p = Start-Process -FilePath $exe -ArgumentList $args `
+      -WindowStyle Hidden `
+      -RedirectStandardOutput $logFile `
+      -RedirectStandardError $errFile `
+      -PassThru
+    
+    Write-Info ("Started llama-server (PID {0})" -f $p.Id)
+    Write-Info ("  Logs: {0}" -f $errFile)
+  } catch {
+    Write-Warn ("Failed to start llama-server: {0}" -f $_.Exception.Message)
+    return $false
+  }
+  
+  # Wait for readiness
+  Write-Info "Waiting for llama-server to initialize..."
+  for ($i=0; $i -lt 30; $i++) {
+    if (Test-LlamaServerReady -ServerUrl $ServerUrl) {
+      Write-Info "llama-server is ready!"
+      
+      # Give it a moment to fully load model
+      Start-Sleep -Milliseconds 500
+      
+      # Verify with actual request
+      try {
+        $testBody = @{ prompt = "test"; n_predict = 1 } | ConvertTo-Json
+        $null = Invoke-RestMethod -Uri "$ServerUrl/completion" -Method Post -Body $testBody -ContentType "application/json" -TimeoutSec 5
+        Write-Info "llama-server responding to requests OK"
+      } catch {
+        Write-Warn "llama-server health OK but test request failed (may still be loading)"
+      }
+      
+      return $true
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  
+  Write-Warn "llama-server did not respond within 15 seconds. Check logs:"
+  Write-Warn ("  {0}" -f $errFile)
+  return $false
+}
 
 # ---- VisionLite via Ollama: qwen2.5-vl:3b ----
 function Normalize-QwenTag([string]$s){
   if (-not $s) { return $null }
-  # accept "qwen2.5vl" and make it "qwen2.5-vl"
   return ($s -replace 'qwen2\.5vl','qwen2.5-vl')
 }
 $env:ECHO_VISION_BACKEND = 'ollama'
@@ -110,10 +237,32 @@ if (-not $env:OLLAMA_MODELS -or [string]::IsNullOrWhiteSpace($env:OLLAMA_MODELS)
   }
 }
 
+# ---- Start IM (subconscious) daemon to backfill preferences from conversation history ----
+function Ensure-IM {
+  try {
+    $pidFile = Join-Home 'state\resident.IM.pid'
+    $needStart = $true
+    if (Test-Path -LiteralPath $pidFile) {
+      try { $pid = [int](Get-Content -LiteralPath $pidFile -Raw); Get-Process -Id $pid -ErrorAction Stop | Out-Null; $needStart = $false } catch { $needStart = $true }
+    }
+    if ($needStart) {
+      $imPath = Join-Home 'Start-IM.ps1'
+      if (Test-Path -LiteralPath $imPath) {
+        Write-Info 'Starting IM (preferences watcher)'
+        Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$imPath,'-PollMs','2000') -WindowStyle Hidden | Out-Null
+      } else {
+        Write-Warn ('IM script not found at {0}' -f $imPath)
+      }
+    } else {
+      Write-Info 'IM already running'
+    }
+  } catch { Write-Warn ('Ensure-IM error: {0}' -f $_.Exception.Message) }
+}
+
 # ---- Ollama warmup helpers ----
 function Get-OllamaWarmTimeoutSec {
   try { if ($env:ECHO_VISION_WARMUP_TIMEOUT -and $env:ECHO_VISION_WARMUP_TIMEOUT.Trim()) { return [int]$env:ECHO_VISION_WARMUP_TIMEOUT } } catch {}
-  return 30
+  return 60
 }
 
 function New-WarmupImagePath {
@@ -173,7 +322,7 @@ function Warm-OllamaVision {
     $imgPath = New-WarmupImagePath
     $b64 = $null
     if ($imgPath -and (Test-Path -LiteralPath $imgPath)) { $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($imgPath)) }
-    $prompt = "Warmup. Describe briefly. <desc>ok</desc>"
+    $prompt = 'Warmup. Describe briefly.'
 
     try {
       $bodyGen = @{ model = $Model; prompt = $prompt; stream = $false };
@@ -239,11 +388,12 @@ function Ensure-OllamaServer {
 }
 
 # ---- child script paths ----
-$pathEcho    = Join-Home 'Start-Echo.ps1'
-$pathIM      = Join-Home 'Start-IM.ps1'
-$pathRoom    = Join-Home 'Start-EchoRoom.ps1'
-$pathVision  = Join-Home 'Start-VisionProbe-Lite.ps1'
-$pathWhisper = Join-Home 'tools\Start-WhisperStreamToInbox.ps1'
+$pathEcho     = Join-Home 'Start-Echo.ps1'
+$pathIM       = Join-Home 'Start-IM.ps1'
+$pathRoom     = Join-Home 'Start-EchoRoom.ps1'
+$pathVision   = Join-Home 'Start-VisionProbe-Lite.ps1'
+$pathWhisper  = Join-Home 'tools\Start-WhisperStreamToInbox.ps1'
+$pathReflector= Join-Home 'Start-Reflector.ps1'
 
 # ---- Start-Child (PS5.1-safe) ----
 function Start-Child {
@@ -291,12 +441,25 @@ Write-Info ("  IM        : {0}" -f $pathIM)
 Write-Info ("  EchoRoom  : {0}" -f $pathRoom)
 Write-Info ("  VisionLite: {0}" -f $pathVision)
 Write-Info ("  Whisper   : {0}" -f $pathWhisper)
+Write-Info ("  Reflector   : {0}" -f $pathReflector)
+
+# ----  Start servers before children ----
+Write-Info ""
+Write-Info "Starting servers..."
+
+# 1. Start llama-server (REQUIRED for Echo/IM/Router)
+[void](Ensure-LlamaServer -ServerUrl $env:ECHO_LLAMA_SERVER -ModelPath $env:ECHO_LLAMACPP_MODEL)
+
+# 2. Start Ollama (for VisionLite)
+[void](Ensure-OllamaServer -OllamaHost $env:OLLAMA_HOST)
+
+# 3. Warm up the vision model
+[void](Warm-OllamaVision -OllamaHost $env:OLLAMA_HOST -Model $env:ECHO_VISION_MODEL)
+
+Write-Info ""
+Write-Info "Starting Echo components..."
 
 # ---- launch children ----
-# Ensure Ollama server is up before starting VisionLite (non-fatal if not)
-[void](Ensure-OllamaServer -OllamaHost $env:OLLAMA_HOST)
-# Warm up the vision model so short VisionLite timeouts succeed
-[void](Warm-OllamaVision -OllamaHost $env:OLLAMA_HOST -Model $env:ECHO_VISION_MODEL)
 $children = [ordered]@{}
 $children['Echo']   = Start-Child -File $pathEcho  -Name 'Echo'
 $children['IM']     = Start-Child -File $pathIM    -Name 'IM'
@@ -327,4 +490,12 @@ if ($pidPairs.Count -gt 0) {
   Write-Warn 'No children appear to be running.'
 }
 
-Write-Info "Done. Tail logs in .\logs (latest *.log files)."
+Write-Info ""
+Write-Info "Echo system started with GPU optimization!"
+Write-Info "   - llama-server: $env:ECHO_LLAMA_SERVER"
+Write-Info "   - GPU layers: $env:ECHO_LLAMA_GPU_LAYERS"
+Write-Info "   - Threads: $env:ECHO_LLAMA_THREADS"
+Write-Info ""
+Write-Info "Monitor GPU: nvidia-smi dmon -s u -d 1"
+$logsPath = Join-Path $env:ECHO_HOME 'logs'
+Write-Info "Check logs: $logsPath (latest log files)"

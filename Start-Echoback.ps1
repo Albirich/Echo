@@ -420,23 +420,7 @@ function Add-Jsonl([string]$Path, $Obj) {
   } catch { }
 }
 
-function Append-Outbox($Obj) {
-  try {
-    if ($Obj -and $Obj.kind -eq 'assistant' -and $Obj.PSObject.Properties['text'] -and $Obj.text) {
-      if (Get-Command Apply-EmbeddedPreferenceUpdates -ErrorAction SilentlyContinue) {
-        $pr = Apply-EmbeddedPreferenceUpdates -Text ([string]$Obj.text)
-        if ($pr -and $pr.applied) {
-          # Trace + explicit tool event for visibility in outbox
-          $evt = @{ via=$pr.via; detail=$pr.detail }
-          $trace = @{ kind='system'; channel='trace'; stage='preferences.update'; data=$evt; ts=(Get-Date).ToString('o') }
-          Add-Jsonl -Path $OUTBOX -Obj $trace
-          try { Add-Jsonl -Path $OUTBOX -Obj @{ kind='system'; channel='tool'; event='preferences.update'; via=$pr.via; detail=$pr.detail } } catch {}
-        }
-      }
-    }
-  } catch {}
-  Add-Jsonl -Path $OUTBOX -Obj $Obj
-}
+function Append-Outbox($Obj) { Add-Jsonl -Path $OUTBOX -Obj $Obj }
 
 function Trace([string]$Stage, $Data=$null) {
   $evt = @{ kind='system'; channel='trace'; stage=$Stage; data=$Data; ts=(Get-Date).ToString('o') }
@@ -718,6 +702,40 @@ function Get-ToolRegistry {
         id = @{ type = 'string'; description = 'Memory id like deep:123' }
       }
       required = @('id')
+    }
+    'preferences.get' = @{
+      name = 'preferences.get'
+      description = 'Read preferences. Optionally filter to specific keys (dot-paths).'
+      parameters = @{
+        keys = @{ type = 'array'; description = 'Optional array of dot-path keys to return' }
+      }
+      required = @()
+    }
+
+    'preferences.set' = @{
+      name = 'preferences.set'
+      description = 'Set a single preference value by dot-path. Value must be JSON to preserve type.'
+      parameters = @{
+        key        = @{ type = 'string'; description = 'Dot-path (e.g., ui.avatar.auto_change)' }
+        value_json = @{ type = 'string'; description = 'JSON-encoded value (e.g., true, 0.9, "casual/neutral.png", {"min":-0.2,"max":0.5})' }
+      }
+      required = @('key','value_json')
+    }
+
+    'preferences.update' = @{
+      name = 'preferences.update'
+      description = 'Deep-merge a JSON object into preferences.'
+      parameters = @{
+        patch_json = @{ type = 'string'; description = 'JSON object to merge' }
+      }
+      required = @('patch_json')
+    }
+
+    'preferences.reset' = @{
+      name = 'preferences.reset'
+      description = 'Reset preferences to defaults (schema_version bumped).'
+      parameters = @{}
+      required = @()
     }
   }
 }
@@ -1254,6 +1272,10 @@ function Invoke-Tool {
       'write_file'         { Invoke-ToolWriteFile -Params $Parameters }
       'memory.search'      { Invoke-ToolMemorySearch -Params $Parameters }
       'memory.read'        { Invoke-ToolMemoryRead -Params $Parameters }
+      'preferences.get'    { $result = Handle-PreferencesGet -Args $tool.args }
+      'preferences.set'    { $result = Handle-PreferencesSet -Args $tool.args }
+      'preferences.update' { $result = Handle-PreferencesUpdate -Args $tool.args }
+      'preferences.reset'  { $result = Handle-PreferencesReset }
       default {
         @{ success = $false; error = "Tool not implemented: $ToolName" }
       }
@@ -1268,6 +1290,157 @@ function Invoke-Tool {
       tool = $ToolName
     }
   }
+}
+
+# ---------- Preferences core ----------
+function Get-StateDir {
+  if ($env:ECHO_STATE_DIR) { return $env:ECHO_STATE_DIR }
+  return (Join-Path $PSScriptRoot 'state')
+}
+
+function Get-PrefsPath { Join-Path (Get-StateDir) 'preferences.json' }
+
+function Get-DefaultPreferences {
+  [ordered]@{
+    schema_version = '1.0'
+    ui = @{
+      avatar = @{
+        auto_change = $true
+        # map optional emotion buckets to images
+        rules = @(
+          @{ when = 'angry';   image = 'classic dress/angry.png' },
+          @{ when = 'happy';   image = 'classic dress/happy.png' },
+          @{ when = 'neutral'; image = 'casual/neutral.png' }
+        )
+      }
+      background = @{
+        auto_change = $false
+        rules = @()  # e.g., @{ when = '#coding'; image = 'desks/terminal.png' }
+      }
+    }
+    capture = @{
+      episodes = @{
+        enabled = $true
+        min_response_length = 500
+        intensity_threshold = 0.9  # |v,a| magnitude; keep aligned with Auto-CaptureEpisode
+      }
+    }
+    speech = @{
+      stt = @{
+        engine = 'vosk'   # 'vosk' | 'sapi' | 'none'
+        ptt   = $true
+      }
+    }
+    memory = @{
+      shallow = @{ max_items = 200 }
+      deep    = @{ autosave_tags = $true }
+    }
+  }
+}
+
+function Read-Preferences {
+  $path = Get-PrefsPath
+  if (Test-Path $path) {
+    try { return (Get-Content $path -Raw | ConvertFrom-Json -AsHashtable) } catch {}
+  }
+  $def = Get-DefaultPreferences
+  Write-Preferences $def | Out-Null
+  return $def
+}
+
+function Write-Preferences($prefs) {
+  $path = Get-PrefsPath
+  $dir  = Split-Path $path
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+  ($prefs | ConvertTo-Json -Depth 10) | Set-Content -Encoding UTF8 $path
+  return $prefs
+}
+
+function Merge-Hashtable($target, $patch) {
+  foreach ($k in $patch.Keys) {
+    $pv = $patch[$k]
+    if ($null -ne $target[$k] -and
+        ($target[$k] -is [hashtable]) -and
+        ($pv -is [hashtable])) {
+      Merge-Hashtable -target $target[$k] -patch $pv | Out-Null
+    } else {
+      $target[$k] = $pv
+    }
+  }
+  return $target
+}
+
+function Set-ByPath {
+  param(
+    [hashtable]$Root,
+    [string]$Path,
+    $Value
+  )
+  $parts = $Path.Split('.')
+  $cur = $Root
+  for ($i=0; $i -lt $parts.Length; $i++) {
+    $p = $parts[$i]
+    if ($i -eq $parts.Length-1) {
+      $cur[$p] = $Value
+    } else {
+      if (-not $cur.ContainsKey($p) -or -not ($cur[$p] -is [hashtable])) {
+        $cur[$p] = @{}
+      }
+      $cur = $cur[$p]
+    }
+  }
+}
+
+# ---------- Tool handlers ----------
+function Handle-PreferencesGet {
+  param($Args)
+  $prefs = Read-Preferences
+  $keys  = @()
+  if ($Args -and $Args.PSObject.Properties['keys']) { $keys = @($Args.keys) }
+
+  if (-not $keys -or $keys.Count -eq 0) { return $prefs }
+
+  $out = @{}
+  foreach ($k in $keys) {
+    try {
+      # resolve dot-path
+      $node = $prefs
+      foreach ($part in $k.Split('.')) {
+        if ($node -is [hashtable] -and $node.ContainsKey($part)) { $node = $node[$part] } else { $node = $null; break }
+      }
+      if ($null -ne $node) { $out[$k] = $node }
+    } catch {}
+  }
+  return $out
+}
+
+function Handle-PreferencesSet {
+  param($Args)
+  if (-not $Args.key -or -not $Args.value_json) { throw "preferences.set requires key and value_json" }
+  $prefs = Read-Preferences
+  $val   = try { $Args.value_json | ConvertFrom-Json -AsHashtable } catch { $Args.value_json }  # accept primitives/objects
+  Set-ByPath -Root $prefs -Path $Args.key -Value $val | Out-Null
+  Write-Preferences $prefs | Out-Null
+  return @{ ok = $true; updated = $Args.key }
+}
+
+function Handle-PreferencesUpdate {
+  param($Args)
+  if (-not $Args.patch_json) { throw "preferences.update requires patch_json" }
+  $patch = $Args.patch_json | ConvertFrom-Json -AsHashtable
+  if (-not ($patch -is [hashtable])) { throw "patch_json must be a JSON object" }
+  $prefs = Read-Preferences
+  Merge-Hashtable -target $prefs -patch $patch | Out-Null
+  Write-Preferences $prefs | Out-Null
+  return @{ ok = $true; merged_keys = @($patch.Keys) }
+}
+
+function Handle-PreferencesReset {
+  $prefs = Get-DefaultPreferences
+  # bump schema_version to signal a reset
+  $prefs.schema_version = [string]([version]($prefs.schema_version)).Major + '.0'
+  Write-Preferences $prefs | Out-Null
+  return @{ ok = $true; reset = $true; schema_version = $prefs.schema_version }
 }
 
 # ------------------ Tool Prompt Generation ------------------
@@ -1882,13 +2055,6 @@ $contextInfo
 Guidance:
 - Keep answers short and natural (1?c?,-? "2 lines unless asked for detail).
 - Never reply with a one-word acknowledgement.
- 
- Tool usage for preferences (important):
- - If you discover or set a new preference (e.g., a favorite), emit a JSON tool call FIRST, then your short reply.
- - Exact format (single-line JSON, no markdown fences):
- {"thought":"why","tool":"preferences.update","parameters":{"patch_json":"{\"frames\":{\"Colors\":{\"teal\":{\"score\":0.9}}}"}}
- - Alternative:
- {"tool":"preferences.set","parameters":{"key":"frames.Colors.teal.score","value_json":"0.9"}}
 "@
   return Truncate-Text ($full -replace '\r\n?', "`n").Trim() 8000
 }
@@ -1903,26 +2069,25 @@ function Generate-SimpleChatResponse {
   try {
     try { Import-Module (Join-Path $env:ECHO_HOME 'tools\PromptBuilder.psm1') -Force -DisableNameChecking } catch { }
     $sys = Build-ChatOnlySystemPrompt
-    # Model-appropriate templating (Mistral [INST] or ChatML)
-    $chatml = Build-ChatML -System $sys -User $InitialMessage
+    $parts = @()
+    $parts += "<|im_start|>system`n$sys<|im_end|>"
+    if ($InitialMessage) { $parts += "<|im_start|>user`n$InitialMessage<|im_end|>" }
+    $parts += "<|im_start|>assistant`n"
+    $chatml = ($parts -join "`n")
 
     $root = if ($env:ECHO_HOME -and (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
     $logs = Join-Path $root 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
     $pf = Join-Path $logs ("simple_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
     [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
 
-    # Prefer env-specified chat model; else try common local fallbacks
+    # Prefer env-specified chat model; else Noromaid; else Gemma 4B IT
+    $preferred = Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
     $modelPath = $null
     try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
-    if (-not $modelPath) {
-      $candidates = @(
-        (Join-Path $root 'models\s3nh-nsfw-noromaid-zephyr.Q4_K_M.gguf'),
-        (Join-Path $root 'models\mistral-7b-uncensored\mistral-7b-uncensored-Q5_K_M.gguf'),
-        (Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q5_K_M.gguf'),
-        (Join-Path $root 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'),
-        (Join-Path $root 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf')
-      )
-      foreach ($c in $candidates) { if (Test-Path -LiteralPath $c) { $modelPath = $c; break } }
+    if (-not $modelPath) { $modelPath = $preferred }
+    if (-not (Test-Path -LiteralPath $modelPath)) {
+      $gemma = Join-Path $root 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
+      if (Test-Path -LiteralPath $gemma) { $modelPath = $gemma } else { $modelPath = $preferred }
     }
 
     $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
@@ -1934,18 +2099,6 @@ function Generate-SimpleChatResponse {
     Trace 'simple.chat.req' @{ model=(Split-Path $modelPath -Leaf); prompt_file=$pf }
     $text = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctxSize -GpuLayers $gpuLayers -Temp 0.7 -MaxTokens $maxTok -FlashAttn | Out-String
     $text = $text.Trim()
-    # Try to apply any embedded preference updates in the reply
-    try {
-      if (Get-Command Apply-EmbeddedPreferenceUpdates -ErrorAction SilentlyContinue) {
-        $pr = Apply-EmbeddedPreferenceUpdates -Text $text
-        if ($pr -and $pr.applied) {
-          $evt = @{ via=$pr.via; detail=$pr.detail }
-          $trace = @{ kind='system'; channel='trace'; stage='preferences.update'; data=$evt; ts=(Get-Date).ToString('o') }
-          Add-Jsonl -Path $OUTBOX -Obj $trace
-          try { Add-Jsonl -Path $OUTBOX -Obj @{ kind='system'; channel='tool'; event='preferences.update'; via=$pr.via; detail=$pr.detail } } catch {}
-        }
-      }
-    } catch {}
     # Always write a debug snapshot, even if empty
     Write-LastChatDebug -Mode 'llama' -Model (Split-Path $modelPath -Leaf) -ChatML $chatml -PromptFile $pf -SystemPrompt $sys
     # Emit a trace with emptiness and, if available, refer to last-llama.json
