@@ -4,17 +4,18 @@ param(
   [int]$MicIndex      = -1,
   [string]$EchoHome   = $env:ECHO_HOME,
   [string]$UserName   = "user",
-  [switch]$UseGPU,           # if present, prefer GPU and offload layers
-  [switch]$NoGPU,            # force CPU-only (overrides UseGPU)
-  [int]$Threads = 0,         # worker threads; 0 = let binary decide
+  [switch]$UseGPU,           # explicit GPU enable (redundant now, GPU on by default)
+  [switch]$NoGPU,            # force CPU-only (overrides default)
+  [int]$Threads = 4,         # ✅ CHANGED: Default to 4 threads (was 0)
   [switch]$FlashAttn,        # enable flash attention (GPU builds)
   [switch]$NoRestart,        # disable keep-alive restarts
-  [int]$RestartDelaySec = 3, # delay before restart on exit
-  [int]$StartupGraceMs = 1500, # if the process exits within this, treat as startup failure
-  [int[]]$MicCandidates,     # optional list of mic indices to try; default: -1,0..5 when MicIndex=-1
-  [int]$GpuLayers = 0,       # if >0, pass -ngl to whisper-stream
-  [int]$EndSilenceMs = 1000, # trailing silence required before flush (ms)
-  [switch]$FlushOnPunct      # optionally flush when line ends with punctuation
+  [int]$RestartDelaySec = 3,
+  [int]$StartupGraceMs = 1500,
+  [int[]]$MicCandidates,
+  [int]$GpuLayers = 4,       # ✅ CHANGED: Default to 4 GPU layers (was 0)
+  [int]$EndSilenceMs = 1000,
+  [switch]$FlushOnPunct,
+  [int]$OutputTimeoutSec = 30  # ✅ NEW: Watchdog timeout - restart if no output for this long
 )
 
 if (-not $EchoHome) { $EchoHome = "D:\Echo" }
@@ -32,45 +33,47 @@ if (-not $MicCandidates -or $MicCandidates.Count -eq 0) {
 
 Write-Host ("whisper-stream launcher ready. Model={0}  Candidates=[{1}]" -f $Model, ($MicCandidates -join ',')) -ForegroundColor Green
 
-# Normalize GPU intent from env fallbacks, unless explicitly set
+# ✅ IMPROVED: Normalize GPU intent with better defaults
 try {
-  if ($GpuLayers -le 0 -and $env:ECHO_WHISPER_NGL -and $env:ECHO_WHISPER_NGL.Trim()) { $GpuLayers = [int]$env:ECHO_WHISPER_NGL }
-} catch {}
-try {
-  if ($GpuLayers -le 0 -and $env:ECHO_IM_GPU_LAYERS -and $env:ECHO_IM_GPU_LAYERS.Trim()) { $GpuLayers = [int]$env:ECHO_IM_GPU_LAYERS }
-} catch {}
-try {
-  if ($GpuLayers -le 0 -and $env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $GpuLayers = [int]$env:ECHO_LLAMA_GPU_LAYERS }
+  if ($env:ECHO_WHISPER_NGL -and $env:ECHO_WHISPER_NGL.Trim()) { 
+    $GpuLayers = [int]$env:ECHO_WHISPER_NGL 
+  }
 } catch {}
 
-# Detect target binary flavor (whisper.cpp 'stream.exe' vs custom 'whisper-stream.exe')
+# If still 0 after env check, use 4 as default (was: leave at 0)
+if ($GpuLayers -eq 0 -and -not $NoGPU) { $GpuLayers = 4 }
+
+# Detect binary flavor
 $exeName = [IO.Path]::GetFileName($WhisperExe).ToLowerInvariant()
 $isWhisperCppStream = ($exeName -eq 'stream.exe' -or $exeName -like 'stream-*.exe')
 
+# ✅ IMPROVED: Better GPU status reporting
 if ($NoGPU) {
-  Write-Host "GPU: disabled (--no-gpu)" -ForegroundColor Yellow
-} elseif (-not $isWhisperCppStream -and $GpuLayers -gt 0) {
-  Write-Host ("GPU: requested (-ngl {0})" -f $GpuLayers) -ForegroundColor Green
-} elseif ($UseGPU) {
-  if (-not $isWhisperCppStream) {
-    if ($GpuLayers -le 0) { $GpuLayers = 999 }
-    Write-Host ("GPU: requested (no layers specified; using -ngl {0})" -f $GpuLayers) -ForegroundColor Green
-  } else {
-    Write-Host "GPU: requested (whisper.cpp stream enables GPU by default)" -ForegroundColor Green
-  }
+  $GpuLayers = 0
+  Write-Host "GPU: DISABLED (--no-gpu flag)" -ForegroundColor Yellow
+} elseif ($GpuLayers -gt 0) {
+  Write-Host "GPU: ENABLED with $GpuLayers layers" -ForegroundColor Green
 } else {
-  Write-Host "GPU: preferred (if supported by build)" -ForegroundColor Green
+  Write-Host "GPU: Auto-detect (whisper.cpp default)" -ForegroundColor Cyan
 }
-if ($Threads -gt 0) { Write-Host ("Threads: {0}" -f $Threads) -ForegroundColor Green }
-if ($FlashAttn) { Write-Host "Flash Attention: enabled" -ForegroundColor Green }
-Write-Host "Piping recognized utterances into $Inbox" -ForegroundColor Green
 
-# --- helpers ---
+if ($Threads -gt 0) { 
+  Write-Host "Threads: $Threads (optimized for GPU)" -ForegroundColor Green 
+} else {
+  Write-Host "Threads: Auto-detect" -ForegroundColor Cyan
+}
+
+if ($FlashAttn) { Write-Host "Flash Attention: ENABLED" -ForegroundColor Green }
+Write-Host "Watchdog Timeout: ${OutputTimeoutSec}s (auto-restart if hung)" -ForegroundColor Green
+Write-Host "Piping recognized utterances into $Inbox" -ForegroundColor Green
+Write-Host ""
+
+# Helper functions
 $ansi = "[\u001B\u009B][\[()#;?]*(?:\d{1,4}(?:;\d{0,4})*)?[0-9A-ORZcf-nqry=><]"
 function Clean-Line([string]$s) {
   if (-not $s) { return "" }
-  $s = $s -replace $ansi, ""           # strip ANSI control
-  $s = $s -replace "`r",""             # strip CR
+  $s = $s -replace $ansi, ""
+  $s = $s -replace "`r",""
   return $s.Trim()
 }
 
@@ -82,13 +85,12 @@ function QuoteIfNeeded([string]$s) {
 
 $buf = ""
 $lastSent = ""
-# Track latest time we appended recognized speech to the buffer
 $script:lastVoiceAt = $null
 
 function Flush-Buf([string]$reason) {
   $text = $script:buf.Trim()
   if ($text.Length -lt 3) { $script:buf = ""; $script:lastVoiceAt = $null; return }
-  if ($text -eq $script:lastSent) { $script:buf = ""; return } # drop duplicates
+  if ($text -eq $script:lastSent) { $script:buf = ""; return }
 
   $ts = (Get-Date).ToString("yyyyMMdd-HHmmss-fff")
   $path = Join-Path $Inbox "$ts`_$UserName.txt"
@@ -99,25 +101,27 @@ function Flush-Buf([string]$reason) {
   $script:lastVoiceAt = $null
 }
 
-# Keep-alive loop
+# Main loop
 while ($true) {
   foreach ($mic in $MicCandidates) {
-    # Build process start info for this attempt
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $WhisperExe
 
     $argList = @()
     $argList += @('-m', (QuoteIfNeeded $Model))
     $argList += @('-c', $mic)
+    
+    # ✅ IMPROVED: Always pass threads if set
     if ($Threads -gt 0) { $argList += @('-t', $Threads) }
+    
     if ($NoGPU.IsPresent) {
-      # whisper.cpp stream uses -ng / --no-gpu to disable GPU
       if ($isWhisperCppStream) { $argList += @('-ng') } else { $argList += '--no-gpu' }
     } elseif (-not $isWhisperCppStream -and $GpuLayers -gt 0) {
-      # custom whisper-stream supports -ngl; whisper.cpp stream does not
+      # Custom whisper-stream supports -ngl
       $argList += @('-ngl', $GpuLayers)
     }
-    # flash-attn is not a whisper.cpp flag; only add for custom builds if requested
+    
+    # Flash attention (custom builds only)
     if ($FlashAttn.IsPresent -and -not $isWhisperCppStream) { $argList += '--flash-attn' }
 
     $psi.Arguments = ($argList -join ' ')
@@ -132,14 +136,13 @@ while ($true) {
 
     Write-Host ("whisper-stream running. Mic={0}  Args={1}" -f $mic, $psi.Arguments) -ForegroundColor Green
 
-    # Quick health check: exit within grace window => treat as startup failure
+    # Quick health check
     if ($p.WaitForExit($StartupGraceMs)) {
       $stderrAll = try { $p.StandardError.ReadToEnd() } catch { '' }
       $stdoutAll = try { $p.StandardOutput.ReadToEnd() } catch { '' }
       Write-Host ("[whisper] exited quickly (code {0}) for Mic={1}" -f $p.ExitCode, $mic) -ForegroundColor Yellow
       if ($stderrAll) { Write-Host "[stderr][startup] $stderrAll" -ForegroundColor Red }
       if ($stdoutAll) { Write-Host "[stdout][startup] $stdoutAll" -ForegroundColor DarkYellow }
-      # try next candidate
       continue
     }
 
@@ -147,21 +150,44 @@ while ($true) {
     $stdout = $p.StandardOutput
     $stderr = $p.StandardError
 
-    # echo stderr so we see runtime errors
+    # Echo stderr (async, non-blocking)
     $stderrJob = Start-Job -ScriptBlock {
-      param($h)
-      while ($true) {
-        if (-not $h.EndOfStream) {
-          $line = $h.ReadLine()
+      param($stderrStream)
+      try {
+        while (-not $stderrStream.EndOfStream) {
+          $line = $stderrStream.ReadLine()
           if ($line) { Write-Host "[stderr] $line" -ForegroundColor Red }
-        } else { Start-Sleep -Milliseconds 50 }
+        }
+      } catch {
+        # Stream closed or error - exit gracefully
       }
     } -ArgumentList $stderr
 
-    # --- read loop ---
+    # Read loop with watchdog
+    $lastOutputTime = Get-Date
+
     while (-not $p.HasExited) {
-      $raw = $stdout.ReadLine()
-      if ($null -eq $raw) { Start-Sleep -Milliseconds 10; continue }
+      # Non-blocking read with timeout
+      $raw = $null
+      if (-not $stdout.EndOfStream) {
+        try {
+          $raw = $stdout.ReadLine()
+          if ($null -ne $raw) { $lastOutputTime = Get-Date }
+        } catch {
+          Write-Host "[whisper] ReadLine error: $_" -ForegroundColor Red
+          break
+        }
+      }
+
+      # Check for output timeout (watchdog)
+      $silentSec = [int]((Get-Date) - $lastOutputTime).TotalSeconds
+      if ($silentSec -ge $OutputTimeoutSec) {
+        Write-Host "[whisper] WATCHDOG: No output for ${silentSec}s (threshold: ${OutputTimeoutSec}s) - killing process" -ForegroundColor Red
+        try { $p.Kill() } catch {}
+        break
+      }
+
+      if ($null -eq $raw) { Start-Sleep -Milliseconds 50; continue }
       $line = Clean-Line $raw
       if (-not $line) { continue }
 
@@ -176,10 +202,12 @@ while ($true) {
         }
         continue
       }
-      # Adapt to whisper.cpp stream output: lines often start with 'text: ...'
+      
+      # Adapt to whisper.cpp stream output
       if ($isWhisperCppStream -and $line -match '^text:\s*(.+)$') {
         $line = $Matches[1]
       }
+      
       if ($line -match '^\[[^\]]+\]$') { continue }
       if ($line -match '^(partial:|info:|note:|->)') { continue }
       if ($line -match '^[\.\,\!\?]+$') { continue }
@@ -189,28 +217,45 @@ while ($true) {
       $buf += $line
       $script:lastVoiceAt = Get-Date
       
-      # Optional heuristic: flush when the buffer ends with punctuation (disabled by default)
       if ($FlushOnPunct.IsPresent -and $buf.Length -ge 12 -and $buf -match '[\.!?]$') {
         Flush-Buf "punct"
       }
     }
 
-    # process ended; cleanup and maybe restart
-    $exit = $p.ExitCode
+    # Process ended - cleanup
+    $exit = if ($p.HasExited) { $p.ExitCode } else { -1 }
     if ($buf.Trim()) { Flush-Buf "exit" }
-    try { if (-not $p.HasExited) { $p.Kill() } } catch {}
-    try { if ($stderrJob) { Stop-Job $stderrJob -Force -ErrorAction SilentlyContinue; Remove-Job $stderrJob -Force -ErrorAction SilentlyContinue } } catch {}
+
+    # Force kill if still running
+    try {
+      if (-not $p.HasExited) {
+        Write-Host "[whisper] Force-killing hung process" -ForegroundColor Red
+        $p.Kill()
+        $p.WaitForExit(2000)  # Give it 2 seconds to die
+      }
+    } catch {}
+
+    # Cleanup stderr job
+    try {
+      if ($stderrJob) {
+        Stop-Job $stderrJob -Force -ErrorAction SilentlyContinue
+        Remove-Job $stderrJob -Force -ErrorAction SilentlyContinue
+      }
+    } catch {}
+
+    # Dispose streams
+    try { $stdout.Close(); $stdout.Dispose() } catch {}
+    try { $stderr.Close(); $stderr.Dispose() } catch {}
+    try { $p.Dispose() } catch {}
 
     Write-Host ("[whisper] process exited (code {0}) Mic={1}" -f $exit, $mic) -ForegroundColor Yellow
 
     if ($NoRestart) { return }
     Write-Host ("[whisper] restarting in {0}s..." -f $RestartDelaySec) -ForegroundColor Yellow
     Start-Sleep -Seconds $RestartDelaySec
-    # On restart, prefer the last known-good mic (same mic index)
     $MicCandidates = @($mic)
   }
 
-  # If we exhausted candidates without a stable start and NoRestart is set, bail out
   if ($NoRestart) { break }
   Write-Host ("[whisper] retrying mic candidates after {0}s..." -f $RestartDelaySec) -ForegroundColor Yellow
   Start-Sleep -Seconds $RestartDelaySec

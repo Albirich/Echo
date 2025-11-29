@@ -2,18 +2,18 @@
     "visible_text":  [
 
                      ],
-    "ts":  "2025-11-06T19:20:41.8337758-05:00",
+    "ts":  "2025-11-26T23:57:22.0890151-05:00",
     "active_window":  {
-                          "title":  "im_heartbeat.jsonl - Echo - Visual Studio Code",
-                          "exe":  "C:\\Users\\meuch\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
-                          "process":  "Code"
+                          "title":  "Echo Room (Stop)",
+                          "exe":  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                          "process":  "powershell"
                       },
     "burst":  {
-                  "first_frame":  "frame_20251106_191959_176.jpg",
+                  "first_frame":  "frame_20251126_235721_916.jpg",
                   "frame_count":  1,
                   "duration_sec":  0,
                   "fps":  0,
-                  "last_frame":  "frame_20251106_191959_176.jpg"
+                  "last_frame":  "frame_20251126_235721_916.jpg"
               },
     "summary":  null,
     "salient":  [

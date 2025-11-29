@@ -6,18 +6,13 @@ const els = {
   bg: document.getElementById('background'),
   standWrap: document.getElementById('stand'),
   standImg: document.getElementById('stand-img'),
-  standSelect: document.getElementById('stand-select'),
-  standImport: document.getElementById('stand-import'),
-  standVisible: document.getElementById('stand-visible'),
   standScale: document.getElementById('stand-scale'),
-  standMirror: document.getElementById('stand-mirror'),
+  gamePrompt: document.getElementById('game-prompt'),
   widgets: document.getElementById('widgets'),
   status: document.getElementById('status'),
   chatLog: document.getElementById('chat-log'),
   chatForm: document.getElementById('chat-form'),
   chatInput: document.getElementById('chat-input'),
-  addNote: document.getElementById('add-note'),
-  saveLayout: document.getElementById('save-layout'),
 };
 
 let roomState = {
@@ -27,8 +22,10 @@ let roomState = {
   clickThrough: false,
   width: 1100, height: 700,
   widgets: [],
-  stand: { visible: true, current: '', x:480, y:280, scale:100, mirror:false }
+  stand: { visible: true, current: '', x:480, y:280, scale:100, mirror:false },
+  gamePromptFile: ''
 };
+let gamePromptOptions = [];
 
 function toast(msg) {
   els.status.textContent = msg;
@@ -41,7 +38,19 @@ function toFileUrl(p) {
     return 'file:///' + p.replace(/\\/g, '/');
 }
 
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    roomState.widgets = getWidgetsFromDom();
+    const res = await api.saveState(roomState);
+    toast(res.ok ? 'Saved' : 'Save failed');
+  }, 300);
+}
+
 /* Chat rendering */
+const MAX_CHAT_LINES = 100; // Limit chat history to prevent DOM bloat
+
 function addLine(kind, text) {
   if (!text || !text.trim()) return;
   const div = document.createElement('div');
@@ -53,11 +62,24 @@ function addLine(kind, text) {
   body.textContent = text;
   div.appendChild(who); div.appendChild(body);
   els.chatLog.appendChild(div);
+  
+  // Remove old messages to prevent infinite DOM growth
+  while (els.chatLog.children.length > MAX_CHAT_LINES) {
+    els.chatLog.removeChild(els.chatLog.firstChild);
+  }
+  
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
 }
 
 /* Widgets (sticky notes) */
+// Store observers so we can clean them up
+let widgetObservers = [];
+
 function renderWidgets(list) {
+  // Clean up old observers to prevent memory leaks
+  widgetObservers.forEach(obs => obs.disconnect());
+  widgetObservers = [];
+  
   els.widgets.innerHTML = '';
   (list || []).forEach(n => {
     const el = document.createElement('div');
@@ -90,13 +112,15 @@ function renderWidgets(list) {
     window.addEventListener('mouseup', () => { dragging = false; });
 
     // persist on blur
-    text.addEventListener('blur', () => { n.text = text.textContent; });
+    text.addEventListener('blur', () => { n.text = text.textContent; scheduleSave(); });
     // store live position
     const observer = new MutationObserver(() => {
       n.x = parseInt(el.style.left, 10) || 60;
       n.y = parseInt(el.style.top, 10) || 60;
+      scheduleSave();
     });
     observer.observe(el, { attributes: true, attributeFilter: ['style'] });
+    widgetObservers.push(observer); // Track for cleanup
   });
 }
 function getWidgetsFromDom() {
@@ -112,8 +136,7 @@ function getWidgetsFromDom() {
 
 /* Stand controls */
 function applyStand(st) {
-  const show = !!st.visible;
-  els.standVisible.checked = show;
+  const show = (st.visible !== false);
   els.standImg.style.display = show ? 'block' : 'none';
 
   if (st.current) els.standImg.src = st.current;
@@ -123,24 +146,6 @@ function applyStand(st) {
   const flip = st.mirror ? -1 : 1;
   els.standImg.style.transform = `scale(${flip}, 1) scale(${scale})`;
   els.standScale.value = String(st.scale || 100);
-}
-
-function refreshStandSelect(items) {
-    els.standSelect.innerHTML = '';
-    const optNone = document.createElement('option');
-    optNone.value = '';
-    optNone.textContent = '(none)';
-    els.standSelect.appendChild(optNone);
-
-    (items || []).forEach(it => {
-        const opt = document.createElement('option');
-        opt.value = it.url;
-        const label = it.rel ? (it.rel.replace(/\\/g, '/')) : it.name;
-        // show "folder/file.png" if rel present
-        opt.textContent = it.rel ? `${it.rel.replace(/\\/g, '/')}` : it.name;
-        if (roomState.stand.current === it.url) opt.selected = true;
-        els.standSelect.appendChild(opt);
-    });
 }
 
 /* Drag the stand */
@@ -160,42 +165,37 @@ function refreshStandSelect(items) {
     els.standImg.style.top = y + 'px';
     roomState.stand.x = x; roomState.stand.y = y;
   });
-  window.addEventListener('mouseup', () => { dragging = false; });
+  window.addEventListener('mouseup', () => { if (dragging) { dragging = false; scheduleSave(); } else { dragging = false; } });
 })();
 
 /* Wire toolbar */
-els.standSelect.addEventListener('change', () => {
-  roomState.stand.current = els.standSelect.value || '';
-  applyStand(roomState.stand);
-});
-els.standImport.addEventListener('click', async () => {
-  const res = await api.importStand();
-  refreshStandSelect(res.items);
-});
-els.standVisible.addEventListener('change', () => {
-  roomState.stand.visible = els.standVisible.checked;
-  applyStand(roomState.stand);
-});
 els.standScale.addEventListener('input', () => {
   const v = Math.max(40, Math.min(200, parseInt(els.standScale.value,10)||100));
   roomState.stand.scale = v;
   applyStand(roomState.stand);
+  scheduleSave();
 });
-els.standMirror.addEventListener('click', () => {
-  roomState.stand.mirror = !roomState.stand.mirror;
-  applyStand(roomState.stand);
+els.gamePrompt.addEventListener('change', () => {
+  roomState.gamePromptFile = els.gamePrompt.value || '';
+  scheduleSave();
 });
-els.addNote.addEventListener('click', () => {
-  const id = `w_${Math.random().toString(36).slice(2,8)}`;
-  roomState.widgets = roomState.widgets || [];
-  roomState.widgets.push({ id, x:60, y:60, text:'', color:'#69f' });
-  renderWidgets(roomState.widgets);
-});
-els.saveLayout.addEventListener('click', async () => {
-  roomState.widgets = getWidgetsFromDom();
-  const res = await api.saveState(roomState);
-  toast(res.ok ? 'Saved OK' : 'Save failed');
-});
+
+function renderGamePromptOptions() {
+  if (!els.gamePrompt) return;
+  const selected = roomState.gamePromptFile || '';
+  els.gamePrompt.innerHTML = '';
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'No game selected';
+  els.gamePrompt.appendChild(defaultOpt);
+  (gamePromptOptions || []).forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    els.gamePrompt.appendChild(opt);
+  });
+  els.gamePrompt.value = selected;
+}
 
 /* Chat */
 els.chatForm.addEventListener('submit', async (e) => {
@@ -220,9 +220,18 @@ els.chatForm.addEventListener('submit', async (e) => {
   roomState = Object.assign(roomState, st || {});
   renderWidgets(roomState.widgets || []);
   applyStand(roomState.stand || {});
+  renderGamePromptOptions();
 
-  const items = await api.listStand();
-  refreshStandSelect(items);
+  // load game prompt options after state to set selection
+  try {
+    const promptNames = await api.listGamePrompts();
+    if (Array.isArray(promptNames)) {
+      gamePromptOptions = promptNames;
+      renderGamePromptOptions();
+    }
+  } catch (e) {
+    console.error('Failed to load game prompts', e);
+  }
 
   // subscriptions
   api.onRoom('room:background', (url) => {
@@ -232,8 +241,8 @@ els.chatForm.addEventListener('submit', async (e) => {
     roomState = Object.assign(roomState, state || {});
     renderWidgets(roomState.widgets || []);
     applyStand(roomState.stand || {});
+    renderGamePromptOptions();
   });
-  api.onRoom('stand:list', (items) => refreshStandSelect(items));
 
     // NEW: react to stand events emitted by the daemon
     api.onAppend((obj) => {
@@ -253,10 +262,6 @@ els.chatForm.addEventListener('submit', async (e) => {
                 if (typeof obj.scale === 'number') roomState.stand.scale = obj.scale;
                 if (typeof obj.mirror === 'boolean') roomState.stand.mirror = obj.mirror;
                 applyStand(roomState.stand);
-                return;
-            }
-            if (obj.event === 'stand.list' && Array.isArray(obj.items)) {
-                refreshStandSelect(obj.items);
                 return;
             }
         }

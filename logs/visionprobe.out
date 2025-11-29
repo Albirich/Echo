@@ -1,0 +1,250 @@
+[VisionLite] Vision exe: HTTP llama-server at http://127.0.0.1:8082
+[VisionLite] Display index (zero-based): 0
+[VisionLite] Raw log: D:\Echo\logs\vision.raw.log
+[VisionLite] Caption jsonl: D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002652.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.5s, raw length=1235
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: ``json
+{
+  "summary": "The user is viewing a webpage that appears to be a social media or content-sharing site. The page 
+includes multiple sections, likely for different types of content or user interactions.",
+  "visible_text": ["Explore More", "Discover", "Create", "Your", "Stories", "Upload", "Images", "Caption", "Share", 
+"Comments", "Notifications", "Settings", "Help"],
+  "activity": "The user is scrolling through the site, likely exploring or browsing through the content.",
+  "objects": ["user's avatar", "navigation menu", "content sections"],
+  "layout.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002705.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.4s, raw length=1350
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002719.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.4s, raw length=1206
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002732.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.4s, raw length=1282
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: Here.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002746.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.4s, raw length=1240
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: You.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002800.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.4s, raw length=1337
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002813.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.3s, raw length=1286
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: ``json
+{
+  "summary": "The user is using a digital note-taking or messaging application. The main window shows a chat interface 
+with multiple conversations, and there are notifications at the top. The user interface is clean and user-friendly with
+ a focus on readability and easy navigation.",
+  "visible_text": ["Conversation with User B", "New message from User C", "Notification: New message from User D", 
+"Send", "Reply", "Delete", "Save", "Attach file", "Attach image"],
+  "activity": "The user is interacting with a chat application, possibly sending a message or responding to a 
+notification. They might be considering attaching a file or an image to their message.",
+  "objects": ["Chat interface", "Notification bar", "User profile icons", "Conversation list", "Send button", "Reply 
+button", "Delete button", "Save button", "Attach file button", "Attach image button"],
+  "layout": "The layout is typical of a digital messaging application, with a chat interface at the center, a 
+notification bar at the top, and icons or buttons surrounding the chat area. The user's profile icons and conversations
+ are likely displayed on the left and right sides, respectively.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002827.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.2s, raw length=1204
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: ummary": "The user's display shows a 
+detailed view of a computer screen with various windows open, including a video editing software, a text editor, and a 
+web browser. The user seems to be multitasking, possibly editing a video and checking emails. The interface looks 
+cluttered but functional.",
+  "visible_text": [
+    "File Explorer",
+    "Video Editing",
+    "Text Editor",
+    "Web Browser",
+    "Sign In",
+    "Sign Up",
+    "Add",
+    "Import",
+    "Open",
+    "Save",
+    "Done",
+    "Cancel"
+  ],
+  "activity": "The user is likely engaged in editing a video, as indicated by the 'Video Editing' window. They might be
+ checking emails or browsing the internet, given the presence of the 'Web Browser' window.",
+  "objects": [],
+  "layout": "The screen is divided into multiple windows, with the 'File Explorer' at the bottom, the 'Video Editing' 
+software in the center, and the 'Web Browser' at the top right corner. The text editor is located below the video 
+editing window.",
+  "warnings": []
+}" {
+  "summary": "The user's display shows a detailed view of a computer screen with various windows open, including a 
+video editing software, a text editor, and a web browser. The user seems.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002840.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.2s, raw length=1191
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002853.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 13.3s, raw length=1255
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: The.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002907.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.6s, raw length=1223
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: Here.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002927.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 17.5s, raw length=1075
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: The.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_002945.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.4s, raw length=1383
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: summary.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003004.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.3s, raw length=1336
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: The.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003024.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.4s, raw length=1249
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003043.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.9s, raw length=1253
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: Your.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003103.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.4s, raw length=1345
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: The.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003123.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.4s, raw length=1234
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003143.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 18.8s, raw length=1106
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: It.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003202.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.7s, raw length=1295
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003221.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.6s, raw length=1473
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: "summary": "The user is working on a 
+project, likely in a development or coding environment. The screen shows multiple windows and applications, including a
+ code editor with syntax highlighting, a terminal, and a database management tool. The user appears to be 
+troubleshooting or debugging something, as indicated by the presence of breakpoints and error messages. The layout is 
+typical of a professional development setup, with multiple tabs open simultaneously. The user is likely focused on 
+finding and resolving a specific issue within the code.", "visible_text": ["Breakpoint set at line 42"], "activity": 
+"The user is currently debugging code,.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003241.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 17.5s, raw length=1131
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: A.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003259.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.4s, raw length=1200
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: To.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003318.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.5s, raw length=1166
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: The.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003338.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.4s, raw length=1240
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: The.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003358.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.8s, raw length=1270
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: It.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003418.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.6s, raw length=1244
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003437.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.6s, raw length=1254
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: ``json
+{
+  "summary": "The user is in a workspace with multiple applications open, including a code editor and a video call 
+window. The code editor shows a file named 'main.py', and the video call window is active with a conversation starting 
+with 'Hello, Echo'. The user appears to be multitasking between coding and video call.",
+  "visible_text": ["Code Editor - main.py", "Video Call - Hello, Echo", "Chatbot - Echo.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003457.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.6s, raw length=1248
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: "summary": "Echo is an AI assistant 
+providing information, entertainment, and support. The user is typing a query in the chat area.", "visible_text": 
+["Echo", "user", "typing", "query"], "activity": "The user is typing a query into the chat area of the AI assistant, 
+Echo.", "objects": [], "layout": "The window is divided into two main sections: a chat area at the bottom and a header 
+with the AI assistant's name and functionality buttons at the top.", "warnings": []} {"summary": "Echo is an AI 
+assistant providing information, entertainment, and support. The user is typing a query in the chat area. The.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003517.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.5s, raw length=1185
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: The.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003537.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.4s, raw length=1352
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: .
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003556.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+[VisionLite] Vision completed in 19.4s, raw length=1305
+WARNING: [VisionLite][WARN] Failed to parse vision JSON: Invalid JSON primitive: ummary": "Echo is displaying a 
+screenshot of a user's computer screen with multiple windows open. The primary window shows a video call in progress, 
+with the user's image on the left and their avatar on the right. Various applications, including a chat window, a file 
+explorer, and a music player, are visible in the background.",
+  "visible_text": ["Video Call", "File Explorer", "Music Player", "Chat with Echo", "Send", "Open File", "Download 
+File", "Music Player", "Settings"],
+  "activity": "The user seems to be in the middle of a work session, as they navigate through various applications. The
+ presence of a chat window suggests they might be communicating with someone. The music player indicates they are 
+likely enjoying background music while working.",
+  "objects": ["Video Call Window", "File Explorer Window", "Music Player Window", "Chat Window"],
+  "layout": "The layout shows a split-screen with the video call on the left and a mix of windows on the right, 
+indicating multitasking. The chat and music player windows are positioned at the top-right, while the file explorer is 
+beneath them.",
+  "warnings": []
+} ```json
+{
+  "summary": "Echo is displaying a screenshot of a user's computer screen with multiple windows open. The primary 
+window shows a video call in progress, with.
+[VisionLite] Wrote caption entry to D:\Echo\ui\screen.captions.jsonl
+[VisionLite] Captured raw frame at D:\Echo\sense\screenshots\frame_20251127_003616.png
+[VisionLite] Calling vision server: http://127.0.0.1:8082/completion
+WARNING: [VisionLite][WARN] Vision HTTP call failed: The underlying connection was closed: An unexpected error occurred
+ on a receive.
+WARNING: [VisionLite][WARN] Caption generation failed - no output received.

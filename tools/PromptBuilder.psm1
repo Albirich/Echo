@@ -3,9 +3,40 @@ function Build-ChatML {
     [string]$System, [string]$User,
     [string]$Tools = "", [string]$Memory = "", [string]$Persona = ""
   )
+  # Prefer model-appropriate templating. If the selected model is Mistral,
+  # emit [INST] format; otherwise use ChatML (<|im_start|> tags).
+
+  $modelPath = $env:ECHO_LLAMACPP_MODEL
+  $isMistral = $false
+  try { if ($modelPath -and ($modelPath -match '(?i)mistral')) { $isMistral = $true } } catch {}
+
+  # Build system block from Persona/Tools/Memory/System
+  $sysParts = @()
+  if ($Persona) { $sysParts += $Persona }
+  if ($Tools)   { $sysParts += $Tools }
+  if ($Memory)  { $sysParts += $Memory }
+  if ($System)  { $sysParts += $System }
+  $sysBlock = ($sysParts -join "`n").Trim()
+
+  if ($isMistral) {
+    # Mistral Instruct template
+    # [INST] <<SYS>> <system> <</SYS>>\n<user> [/INST]\n
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('[INST] ')
+    if ($sysBlock) {
+      [void]$sb.Append("<<SYS>>`n")
+      [void]$sb.Append($sysBlock)
+      [void]$sb.Append("`n<</SYS>>`n")
+    }
+    if ($User) { [void]$sb.Append($User) }
+    [void]$sb.Append(' [/INST]')
+    [void]$sb.Append("`n")
+    return $sb.ToString()
+  }
+
+  # Default: ChatML
   # Pass-through mode: if System already contains ChatML tags, treat it as a prelude
-  # and append the live user turn + assistant start. This allows fully structured
-  # system prompts without double-wrapping.
+  # and append the live user turn + assistant start.
   if ($System -and ($System.TrimStart() -like '<|im_start|>*')) {
     $prelude = $System.Trim()
     $tail = ""

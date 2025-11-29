@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('echoRoom', {
   getEnv: () => ipcRenderer.invoke('room:getEnv'),
   getState: () => ipcRenderer.invoke('room:getState'),
   saveState: (st) => ipcRenderer.invoke('room:saveState', st),
+  listGamePrompts: () => ipcRenderer.invoke('game:listPrompts'),
 
   // stand
   listStand: () => ipcRenderer.invoke('stand:list'),

@@ -1,18 +1,22 @@
 {
-    "background":  "file:///D:/Echo/decor/wallpaper.jpg",
-    "theme":  "dark",
-    "alwaysOnTop":  false,
-    "clickThrough":  false,
-    "width":  1100,
-    "height":  700,
-    "widgets":  [
-                ],
-    "stand":  {
-                  "visible":  true,
-                  "current":  "flirty.png",
-                  "x":  480,
-                  "y":  280,
-                  "scale":  100,
-                  "mirror":  false
-              }
+  "background": "file:///D:/Echo/decor/wallpaper.jpg",
+  "theme": "dark",
+  "alwaysOnTop": false,
+  "clickThrough": false,
+  "width": 1100,
+  "height": 700,
+  "widgets": [],
+  "stand": {
+    "visible": true,
+    "current": "file:///D:/Echo/stand/classic_dress/flirty.png?t=1764052591685",
+    "x": 480,
+    "y": 280,
+    "scale": 118,
+    "mirror": false
+  },
+  "gamePromptFile": "",
+  "stickies": [],
+  "notes": [],
+  "version": 1,
+  "visionPromptFile": ""
 }

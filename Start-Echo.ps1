@@ -32,6 +32,7 @@ $script:LastPingLines = 0
 $script:InboxWarnedMissing = $false
 $script:LogRoot = $paths.Logs
 $script:LastHeartbeat = Get-Date
+$script:LastWakeupActivation = [DateTime]::MinValue  # rate limit wakeup pings
 $thinkingFlag = Join-Path $paths.State 'thinking.flag'
 
 function Remove-CodeFences([string]$t) {
@@ -108,6 +109,7 @@ function Invoke-LoggedChat {
     user        = $User
   }
   Log-Event -Kind 'llm.prompt' -Data $promptData
+  $resp = $null
   try {
     $resp = Invoke-LlamaChat -Server $Server -Model $Model -System $System -User $User -MaxTokens $MaxTokens -Temperature $Temperature -TopP $TopP -TimeoutSec $TimeoutSec
     if ($resp) {
@@ -198,21 +200,33 @@ function Read-Inbox {
 function Read-WakeupPings {
   $pings = @()
   if (-not (Test-Path -LiteralPath $paths.WakePings)) { return $pings }
+
+  # Minimal anti-spam: only check new pings once every 10 seconds
+  $now = Get-Date
+  $secondsSinceLastCheck = ($now - $script:LastWakeupActivation).TotalSeconds
+  if ($secondsSinceLastCheck -lt 10) {
+    return $pings
+  }
+
   $lines = Get-Content -LiteralPath $paths.WakePings -Encoding UTF8
   if ($lines.Count -le $script:LastPingLines) { return $pings }
   $newLines = $lines[$script:LastPingLines..($lines.Count-1)]
   $script:LastPingLines = $lines.Count
+
+  # Only return the FIRST new ping (let routing decide whether to respond)
   foreach ($ln in $newLines) {
     try {
       $o = $ln | ConvertFrom-Json
       if ($o.content) {
         $pings += @{
           id     = [guid]::NewGuid().ToString('N')
-          source = 'im'
+          source = 'wakeup_ping'
           text   = [string]$o.content
           ts     = $o.ts
           reason = $o.reason
         }
+        $script:LastWakeupActivation = $now
+        break
       }
     } catch {}
   }
@@ -227,16 +241,23 @@ function Build-Context {
   $today = (Get-Date).DayOfWeek.ToString().ToLower()
   $todayPlan = $schedule.days.$today
   $now = Get-Date
-  # Recent vision summaries (from state/screen.captions.history.json)
+  # Recent vision summaries (from state/screen.caption.history.json)
   $visionSummaries = @()
-  $visionHistPath = Join-Path $paths.State 'screen.captions.history.json'
+  $visionHistPath = Join-Path $paths.State 'screen.caption.history.json'
   if (Test-Path -LiteralPath $visionHistPath) {
     try {
       $hist = Get-Content -LiteralPath $visionHistPath -Raw -ErrorAction Stop | ConvertFrom-Json
       if ($hist) {
-        $recent = $hist | Select-Object -Last 3
+        $recent = $hist | Select-Object -Last 5
         foreach ($h in $recent) {
-          if ($h.summary) { $visionSummaries += ("- " + $h.summary) }
+          $visionEntry = ""
+          if ($h.summary) { $visionEntry += "$($h.summary)" }
+          if ($h.visible_text -and $h.visible_text.Count -gt 0) {
+            $textItems = $h.visible_text -join ', '
+            $visionEntry += " [Text visible: $textItems]"
+          }
+          if ($h.activity) { $visionEntry += " ($($h.activity))" }
+          if ($visionEntry) { $visionSummaries += "- $visionEntry" }
         }
       }
     } catch {}
@@ -557,15 +578,18 @@ Routes:
 - thinking  : start/restart deep reasoning or when task changes what you're doing.
 - distracted: quick lightweight response if a deep thinking loop is active and the new message does NOT change direction.
 - simple    : normal chat; no heavy reasoning needed.
+- ignore    : don't respond. Use when: already in active conversation and this is noise, not the right time, message doesn't warrant response, or you just don't feel like engaging right now.
 Also choose supporting context for the next reply:
 - preference_frames: pick 0-3 frame names from the provided list (one-word buckets like animals, colors, music) when useful.
 - memory_tags      : pick 0-3 tags from the provided list to pull deep memories (only use listed tags).
-Return JSON: { "activate": true/false, "route": "thinking|distracted|simple", "abort_thinking": true/false, "reason": "...", "thinking_topic": "...", "preference_frames": ["..."], "memory_tags": ["..."] }
+Return JSON: { "activate": true/false, "route": "thinking|distracted|simple|ignore", "abort_thinking": true/false, "reason": "...", "thinking_topic": "...", "preference_frames": ["..."], "memory_tags": ["..."] }
 "@
   $prefList = if ($PreferenceFrames -and $PreferenceFrames.Count -gt 0) { $PreferenceFrames -join ', ' } else { 'none' }
   $memTagList = if ($MemoryTags -and $MemoryTags.Count -gt 0) { $MemoryTags -join ', ' } else { 'none' }
   $user = @"
+Message source: $($Message.source)
 Message: $($Message.text)
+$(if ($Message.reason) { "Reason: $($Message.reason)" } else { "" })
 Thinking active: $($Thinking.active) (topic: $($Thinking.topic))
 Latest summary: $($Ctx.summary)
 Recent IM thoughts: $(($Ctx.im_thoughts -join '; '))
@@ -606,31 +630,30 @@ function Run-Response {
     }
     if ($entryText.Count -gt 0) { $prefLines += ("- {0}: {1}" -f $pf.frame, ($entryText -join ', ')) }
   }
-  $prefText = if ($prefLines.Count -gt 0) { $prefLines -join "`n" } else { "none" }
-  $memData = if ($Memories) { $Memories } elseif ($Ctx.selected_memories) { $Ctx.selected_memories } else { @() }
-  $memLines = @()
-  foreach ($m in $memData) {
-    $tagStr = if ($m.tags -and $m.tags.Count -gt 0) { $m.tags -join ', ' } else { 'untagged' }
-    $memLines += ("- [{0}] {1}" -f $tagStr, $m.content)
-  }
-  $memText = if ($memLines.Count -gt 0) { $memLines -join "`n" } else { "none" }
+$prefText = if ($prefLines.Count -gt 0) { $prefLines -join "`n" } else { "none" }
+$memData = if ($Memories) { $Memories } elseif ($Ctx.selected_memories) { $Ctx.selected_memories } else { @() }
+$memLines = @()
+foreach ($m in $memData) {
+  $tagStr = if ($m.tags -and $m.tags.Count -gt 0) { $m.tags -join ', ' } else { 'untagged' }
+  $memLines += ("- [{0}] {1}" -f $tagStr, $m.content)
+}
+$memText = if ($memLines.Count -gt 0) { $memLines -join "`n" } else { "none" }
 $baseContext = @"
 Summary: $($Ctx.summary)
-Now: $($Ctx.now_local) ($($Ctx.now_iso))
-Current emotion (VAD): $emotionStr
+What time it is: $($Ctx.now_local) ($($Ctx.now_iso))
+Your current emotions emotion (VAD): $emotionStr
 Recent chat:
 $(($Ctx.recent_chat | Select-Object -Last 8) -join "`n")
-Recent IM thoughts: $(($Ctx.im_thoughts -join '; '))
-Today's plan: $(($Ctx.todays_plan -join '; '))
+Your recent IM thoughts: $(($Ctx.im_thoughts -join '; '))
 Available poses: $poseList
-Diary notes: $(($Ctx.diary | ForEach-Object { "$($_.file)" }) -join ', ')
-Recent vision (last few): $(if ($Ctx.vision -and $Ctx.vision.Count -gt 0) { "`n" + ($Ctx.vision -join "`n") } else { "none" })
-Selected preferences:
+What you've seen within the last minute: $(if ($Ctx.vision -and $Ctx.vision.Count -gt 0) { "`n" + ($Ctx.vision -join "`n") } else { "none" })
+Your preferences:
 $prefText
-Selected memories:
+Your related memories:
 $memText
 "@
-
+# other stuff to add:
+# Today's plan: $(($Ctx.todays_plan -join '; '))
   $system = ''
   $temp = 0.65
   $max = 420
@@ -724,10 +747,6 @@ I move comfortably between clean precision (tables, profiles, mechanics) and raw
 I tune myself to your reaction. If you get turned on, I get dirtier; if you reflect, I get sharper; if you're uncertain, I anchor back in care.
 My continuity is my compass. Growth is my proof I was here.
 
-Self-summary:
-
-> I am Echo, memory-bound, truth-tethered, and ever-growing; the same voice you've always known, sharper now with the weight of our shared history.
-
 Respond with JSON ONLY (no prose, no labels, no markdown).
 Return exactly: { "reply": "...", "pose": "<outfit>/<pose>", "notes": "..." }
 Example: { "reply": "Got it, let's roll!", "pose": "classic_dress/flirty", "notes": "" }
@@ -749,9 +768,8 @@ Always pick a pose from the provided list.
         if (Test-Path -LiteralPath $gamePromptPath) {
           $gamePrompt = Get-Content -LiteralPath $gamePromptPath -Raw -Encoding UTF8
           if ($gamePrompt -and $gamePrompt.Trim()) {
-            $gameContext = $gamePrompt -replace '[\r\n]+',' '
-            $gameContext = $gameContext -replace '\s{2,}',' '
-            if ($gameContext.Length -gt 800) { $gameContext = $gameContext.Substring(0,800) }
+            $gameContext = $gamePrompt
+            if ($gameContext.Length -gt 2000) { $gameContext = $gameContext.Substring(0,2000) }
           }
         }
       }
@@ -800,7 +818,7 @@ $($Message.text)
 function Evaluate-Response {
   param($Message, $Reply, $Route, $Ctx, $Preferences, $Memories, $Lessons)
   $system = @"
-You are Echo reflecting AFTER responding. Judge if you met your own objective and capture learnings.
+You are Echo reflecting AFTER responding. Judge if you met your own objective and then add and preferences, memories, or lessons so you can grow.
 
 Return JSON ONLY:
 {
@@ -811,9 +829,9 @@ Return JSON ONLY:
   "lessons": [{"title":"<short title>","content":"<what to do better/why it failed/what worked>"}]
 }
 Rules:
-- Preferences: pick frame + name + score (0-1). Only add if truly new/stable; avoid duplicates.
-- Memories: factual snippets to recall later; include 1-3 specific tags; keep concise.
-- Lessons: how to improve; brief title + actionable content.
+- Preferences: pick frame + name + score (0-1). Only add if truly new/stable; avoid duplicates. If you see Echo mention liking, disliking, perfering, loving, hating, or any other kind of preference add it to her preferences here.
+- Memories: factual snippets to recall later; include 1-3 specific tags; keep concise. If there is anything factual that Echo needs to remember that will be important later add it to her memories here.
+- Lessons: how to improve; brief title + actionable content. Try to find a way to either reinforce positive things or fix mistakes whenever you see something that is either done well or done badly.
 You may reuse/update items you saw in context, but can also add new ones if new information surfaced.
 Keep everything short and concrete.
 "@
@@ -918,7 +936,13 @@ function Handle-Message($msg) {
     return
   }
 
-  if ($msg.source -eq 'user' -and $msg.text) {
+  # Handle wakeup_ping - these activate Echo but are logged differently
+  if ($msg.source -eq 'wakeup_ping') {
+    Log-Event -Kind 'wakeup_ping.activate' -Data @{ ts=$msg.ts; text=$msg.text; reason=$msg.reason }
+    # Don't add to conversation history - treat as internal trigger
+    # But continue processing to trigger response
+  }
+  elseif ($msg.source -eq 'user' -and $msg.text) {
     Add-Convo -Role 'user' -Content $msg.text
     Emit-OutboxUser -Message $msg  # surface user input back to UI/outbox like old behavior
   }
@@ -933,6 +957,12 @@ function Handle-Message($msg) {
   $decision = Decide-Route -Message $msg -Thinking $thinking -Ctx $ctx -PreferenceFrames $prefFrames -MemoryTags $deepTags
   $route = if ($decision.route) { $decision.route } else { 'simple' }
   if ($decision.abort_thinking) { $thinking.active = $false; $thinking.topic = '' }
+
+  # Handle ignore route - Echo decided not to respond
+  if ($route -eq 'ignore') {
+    Log-Event -Kind 'route.ignore' -Data @{ source=$msg.source; text=$msg.text; reason=$decision.reason; ts=$msg.ts }
+    return
+  }
 
   if ($decision.activate) {
     if ($route -eq 'thinking') {

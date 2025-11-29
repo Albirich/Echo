@@ -216,7 +216,7 @@ $OUTBOX  = Join-Path $UI_DIR 'outbox.jsonl'
 $STATE_DIR = Join-Path $env:ECHO_HOME 'state'
 $CONTEXT_PATH = Join-Path $STATE_DIR 'context.json'
 $EMOTION_PATH = Join-Path $STATE_DIR 'emotion.vad.json'
-$VISION_PATH = Join-Path $STATE_DIR 'screen.caption.json'
+$VISION_PATH = Join-Path $STATE_DIR 'screen.caption.history.json'
 
 New-Item -ItemType Directory -Force -Path $UI_DIR,$INBOX_Q,$STATE_DIR | Out-Null
 if (-not (Test-Path -LiteralPath $OUTBOX)) {
@@ -1620,7 +1620,7 @@ Rules:
       }
     } catch {}
     if ($tText -and $tText.Trim().Length -gt 0) {
-      $lines += "`nWhat I'm thinking"
+      $lines += "`nWhat you're thinking"
       $lines += $tText
     }
   }
@@ -1643,12 +1643,12 @@ Rules:
     try { $d = if ($src.PSObject.Properties.Match('d').Count) { $src.d } elseif ($src.PSObject.Properties.Match('dominance').Count) { $src.dominance } else { $null } } catch {}
   }
   if ($v -ne $null -and $a -ne $null -and $d -ne $null) {
-      $lines += "`nHow I feel:"
+      $lines += "`nHow you feel:"
       $lines += "Valence: $v (pleasure/displeasure)"
       $lines += "Arousal: $a (energy/activation)"
       $lines += "Dominance: $d (control/confidence)"
-      $lines += "These values range from -1 to 1 as the extremes. I can use them to determine my current emotions."
-      $lines += "I should express my emotions through my avatar. I can use change_avatar to match my appearance to how I feel."
+      $lines += "These values range from -1 to 1 as the extremes. You can use them to determine my current emotions."
+      $lines += "You should express my emotions through my avatar. You can use change_avatar to match my appearance to how You feel."
   }
   
   # Vision (use UI_DIR; last 6 summaries; no fallback; no module autoload)
@@ -1667,22 +1667,39 @@ Rules:
     $ScreenJsonlPath = [IO.Path]::Combine($uiRoot, 'screen.captions.jsonl')
   }
 
-  # Extract the last 6 summary values from the file
+  # Extract the last 6 entries from the trimmed history if available; fallback to jsonl scan
   $visionLines = New-Object System.Collections.Generic.List[string]
-  if ([IO.File]::Exists($ScreenJsonlPath)) {
+  $historyPath = [IO.Path]::Combine($uiRoot, 'screen.captions.history.json')
+  if (Test-Path -LiteralPath $historyPath) {
+    try {
+      $hist = Get-Content -LiteralPath $historyPath -Raw -ErrorAction Stop | ConvertFrom-Json
+      if ($hist) {
+        $recent = $hist | Select-Object -Last $maxSummaries
+        foreach ($h in $recent) {
+          $visionEntry = ""
+          if ($h.summary) { $visionEntry += "$($h.summary)" }
+          if ($h.visible_text -and $h.visible_text.Count -gt 0) {
+            $textItems = $h.visible_text -join ', '
+            $visionEntry += " [Text visible: $textItems]"
+          }
+          if ($h.activity) { $visionEntry += " ($($h.activity))" }
+          if ($visionEntry) { $visionLines.Add("- $visionEntry") }
+        }
+      }
+    } catch {}
+  }
+
+  if ($visionLines.Count -eq 0 -and [IO.File]::Exists($ScreenJsonlPath)) {
     try {
       $allLines = [IO.File]::ReadAllLines($ScreenJsonlPath)
       for ($i = $allLines.Length - 1; $i -ge 0 -and $visionLines.Count -lt $maxSummaries; $i--) {
         $ln = $allLines[$i]
         if ($ln -and $ln.Trim().Length -gt 0) {
-          # Look for the "summary": "..." line and extract the text
           $m = [System.Text.RegularExpressions.Regex]::Match($ln, '"summary"\s*:\s*"((?:[^"\\]|\\.)*)"')
           if ($m.Success) {
             $raw = $m.Groups[1].Value
-            # Unescape JSON escapes (e.g. \\n, \\" etc.)
             $sum = [System.Text.RegularExpressions.Regex]::Unescape($raw).Trim()
             if ($sum.Length -gt 0) {
-              # Insert at the beginning to maintain chronological order (oldest to newest)
               $visionLines.Insert(0, ("- {0}" -f $sum))
             }
           }
@@ -1693,13 +1710,13 @@ Rules:
 
   # Only add to the context if we actually found any summaries
   if ($visionLines.Count -gt 0) {
-    $lines += "`nOver the last minute, this is summaries of screenshots from what I've seen on screen."
+    $lines += "`nOver the last minute, this is summaries of screenshots from what you've seen on screen."
     $lines += $visionLines
   }
 
   # Memory hints
   if ($state.context -and $state.context.shallow_memory -and $state.context.shallow_memory.Count -gt 0) {
-    $lines += "`nThings I know about the situation."
+    $lines += "`nThings you know about the situation."
     $lines += ($state.context.shallow_memory -join '; ')
   }
 

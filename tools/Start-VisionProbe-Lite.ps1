@@ -33,8 +33,8 @@ $Backend        = if ($env:ECHO_VISION_BACKEND -and $env:ECHO_VISION_BACKEND.Tri
 
 # llama.cpp model & exe (required for fallback / default)
 $LlamaExe       = if ($env:LLAMA_VISION_EXE -and (Test-Path $env:LLAMA_VISION_EXE)) { $env:LLAMA_VISION_EXE } else { 'D:\llama-cpp\llama-mtmd-cli.exe' }
-$Model          = if ($env:ECHO_VISION_LLAMACPP_MODEL -and (Test-Path $env:ECHO_VISION_LLAMACPP_MODEL)) { $env:ECHO_VISION_LLAMACPP_MODEL } else { 'D:\Echo\models\llava-phi-3-mini-f16.gguf' }
-$Mmproj         = if ($env:ECHO_VISION_MMPROJ -and (Test-Path $env:ECHO_VISION_MMPROJ)) { $env:ECHO_VISION_MMPROJ } else { $null }
+$Model          = if ($env:ECHO_VISION_LLAMACPP_MODEL -and (Test-Path $env:ECHO_VISION_LLAMACPP_MODEL)) { $env:ECHO_VISION_LLAMACPP_MODEL } else { 'D:\Echo\models\Qwen2.5-VL-3B-Abliterated-Caption-it.Q8_0.gguf' }
+$Mmproj         = if ($env:ECHO_VISION_MMPROJ -and (Test-Path $env:ECHO_VISION_MMPROJ)) { $env:ECHO_VISION_MMPROJ } else { 'D:\Echo\models\Qwen2.5-VL-3B-Abliterated-Caption-it.mmproj-Q8_0.gguf' }
 
 # OPTIMIZED: Performance knobs - tuned for speed
 $Threads        = 4  # Keep at 4, more can hurt GPU performance

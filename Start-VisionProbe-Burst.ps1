@@ -41,23 +41,35 @@ elseif (Test-Path 'D:\llama-cpp\llama-mtmd-cli.exe') { $LlamaExe = 'D:\llama-cpp
 elseif ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $LlamaExe = $env:LLAMA_EXE }
 else { $LlamaExe = 'D:\llama-cpp\llama-cli.exe' }
 
-# Model (prefer LLaVA Phi-3 mini f16 by default)
+# Model (prefer Qwen2.5-VL-3B Abliterated by default)
 $Model = $null
 if     ($env:ECHO_VISION_LLAMACPP_MODEL -and (Test-Path $env:ECHO_VISION_LLAMACPP_MODEL)) { $Model = $env:ECHO_VISION_LLAMACPP_MODEL }
 elseif ($env:ECHO_LLAMACPP_VISION_MODEL -and (Test-Path $env:ECHO_LLAMACPP_VISION_MODEL)) { $Model = $env:ECHO_LLAMACPP_VISION_MODEL }
 elseif ($env:VISION_MODEL -and (Test-Path $env:VISION_MODEL)) { $Model = $env:VISION_MODEL }
+elseif (Test-Path (Join-Path $HomeDir 'models\Qwen2.5-VL-3B-Abliterated-Caption-it.Q8_0.gguf')) { $Model = (Join-Path $HomeDir 'models\Qwen2.5-VL-3B-Abliterated-Caption-it.Q8_0.gguf') }
+elseif (Test-Path (Join-Path $HomeDir 'models\Qwen2.5-VL-7B-Abliterated-Caption-it.Q4_K_M.gguf')) { $Model = (Join-Path $HomeDir 'models\Qwen2.5-VL-7B-Abliterated-Caption-it.Q4_K_M.gguf') }
 elseif (Test-Path (Join-Path $HomeDir 'models\llava-phi-3-mini-f16.gguf')) { $Model = (Join-Path $HomeDir 'models\llava-phi-3-mini-f16.gguf') }
-else { $Model = 'D:\Echo\models\llava-phi-3-mini-f16.gguf' }
+else { $Model = 'D:\Echo\models\Qwen2.5-VL-3B-Abliterated-Caption-it.Q8_0.gguf' }
 
-# mmproj for LLaVA (ignore placeholders like <PATH\TO\mmproj>)
+# mmproj for Qwen/LLaVA (ignore placeholders like <PATH\TO\mmproj>)
 $Mmproj = $null
 if ($env:ECHO_VISION_MMPROJ -and (Test-Path $env:ECHO_VISION_MMPROJ)) { $Mmproj = $env:ECHO_VISION_MMPROJ }
 else {
-  if ($Model -and (Split-Path -Leaf $Model) -match 'llava' -and (Test-Path $Model)) {
+  if ($Model -and (Test-Path $Model)) {
     $modelDir = Split-Path -Parent $Model
-    $cand1 = Join-Path $modelDir 'llava-phi-3-mini-mmproj-f16.gguf'
-    $cand2 = Join-Path (Join-Path $HomeDir 'models') 'llava-phi-3-mini-mmproj-f16.gguf'
-    foreach ($c in @($cand1, $cand2)) { if (Test-Path $c) { $Mmproj = $c; break } }
+    $modelLeaf = Split-Path -Leaf $Model
+    $candList = @()
+    if ($modelLeaf -match 'Qwen2\.5-VL-3B-Abliterated-Caption-it') {
+      $candList += Join-Path $modelDir 'Qwen2.5-VL-3B-Abliterated-Caption-it.mmproj-Q8_0.gguf'
+      $candList += Join-Path (Join-Path $HomeDir 'models') 'Qwen2.5-VL-3B-Abliterated-Caption-it.mmproj-Q8_0.gguf'
+    } elseif ($modelLeaf -match 'Qwen2\.5-VL-7B-Abliterated-Caption-it') {
+      $candList += Join-Path $modelDir 'Qwen2.5-VL-7B-Abliterated-Caption-it.mmproj-f16.gguf'
+      $candList += Join-Path (Join-Path $HomeDir 'models') 'Qwen2.5-VL-7B-Abliterated-Caption-it.mmproj-f16.gguf'
+    } elseif ($modelLeaf -match 'llava-phi-3-mini') {
+      $candList += Join-Path $modelDir 'llava-phi-3-mini-mmproj-f16.gguf'
+      $candList += Join-Path (Join-Path $HomeDir 'models') 'llava-phi-3-mini-mmproj-f16.gguf'
+    }
+    foreach ($c in $candList) { if (Test-Path $c) { $Mmproj = $c; break } }
   }
 }
 

@@ -30,6 +30,14 @@ html, body, #root { width: 100%; overflow: hidden; height: 100%; margin: 0; back
   font-size: 13px;
 }
 #toolbar .sep { width: 1px; height: 16px; background: #2a2f3a; margin: 0 6px; }
+#toolbar select {
+  background: #0e1116;
+  color: #e7e9ee;
+  border: 1px solid #2a2f3a;
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+#toolbar .vision-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 
 #widgets { position: absolute; inset: 0; z-index: 2; }
 .note {

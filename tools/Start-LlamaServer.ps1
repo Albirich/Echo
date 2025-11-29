@@ -8,7 +8,7 @@ param(
     [int]$Port          = 8080,
 
     # Performance knobs
-    [int]$Threads       = ([Math]::Max(1, [Environment]::ProcessorCount - 2)),
+    [int]$Threads       = 4 ,
     [int]$ThreadsBatch  = $Threads,
     [int]$Batch         = 1024,
     [int]$Ctx           = 4096,

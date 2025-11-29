@@ -1,4 +1,4 @@
-// D:\Echo\room\echo-room\main.js — state-safe edition
+// D:\Echo\room\echo-room\main.js - state-safe edition
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -12,6 +12,8 @@ const INBOXQ = path.join(UI, 'inboxq');
 const OUTBOX = path.join(UI, 'outbox.jsonl');
 const STATE_PATH = path.join(UI, 'state.json');
 const STAND_DIR = path.join(HOME, 'stand');
+const VISION_PROMPT_DIR = path.join(HOME, 'config', 'vision-prompts');
+const GAME_PROMPT_DIR = path.join(HOME, 'config', 'game-prompts');
 
 // --- Guard constants ---
 const MAX_STATE_BYTES = 5 * 1024 * 1024; // 5 MB safety cap
@@ -35,6 +37,7 @@ function defaultState() {
     stickies: [],
     notes: [],
     stand: { visible: true, current: '', x: 480, y: 280, scale: 100, mirror: false },
+    visionPromptFile: '',
     version: 1
   };
 }
@@ -56,6 +59,7 @@ function compactState(state) {
   const arr = (x) => Array.isArray(x) ? x : [];
   state.stickies = arr(state.stickies).slice(-MAX_ITEMS);
   state.notes = arr(state.notes).slice(-MAX_ITEMS);
+  if (typeof state.visionPromptFile !== 'string') state.visionPromptFile = '';
 
   // avoid embedding giant strings/base64 blobs
   state.stickies = state.stickies.map(s => {
@@ -131,8 +135,37 @@ function listStand() {
   return items;
 }
 
+function listVisionPrompts() {
+  ensureDir(VISION_PROMPT_DIR);
+  try {
+    const allowed = new Set(['.txt', '.md', '.prompt']);
+    const files = fs.readdirSync(VISION_PROMPT_DIR, { withFileTypes: true })
+      .filter(ent => ent.isFile() && allowed.has(path.extname(ent.name).toLowerCase()))
+      .map(ent => ent.name)
+      .sort((a, b) => a.localeCompare(b));
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+function listGamePrompts() {
+  ensureDir(GAME_PROMPT_DIR);
+  try {
+    const allowed = new Set(['.txt', '.md', '.prompt']);
+    const files = fs.readdirSync(GAME_PROMPT_DIR, { withFileTypes: true })
+      .filter(ent => ent.isFile() && allowed.has(path.extname(ent.name).toLowerCase()))
+      .map(ent => ent.name)
+      .sort((a, b) => a.localeCompare(b));
+    return files;
+  } catch {
+    return [];
+  }
+}
+
 // --- Ensure dirs/files & preflight the state file ---
 ensureDir(HOME); ensureDir(DECOR); ensureDir(UI); ensureDir(INBOXQ); ensureDir(STAND_DIR);
+ensureDir(VISION_PROMPT_DIR); ensureDir(GAME_PROMPT_DIR);
 if (!fs.existsSync(STATE_PATH)) {
   writeStateSafe(defaultState());
 } else {
@@ -204,7 +237,7 @@ function createWindow() {
       label: 'File',
       submenu: [
         {
-          label: 'Pick Background…',
+          label: 'Pick Background...',
           click: async () => {
             const res = await dialog.showOpenDialog(mainWindow, {
               title: 'Choose Background',
@@ -246,14 +279,20 @@ app.whenReady().then(() => {
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 100 }
   });
 
+  let pushStateTimeout = null;
   function pushStateFromDisk() {
-    const st = readStateSafe();
-    if (!mainWindow) return;
-    if (st.width && st.height) {
-      mainWindow.setSize(Number(st.width) || 1100, Number(st.height) || 700);
-    }
-    enforceOnTop(!!st.alwaysOnTop);
-    mainWindow.webContents.send('room:state', st);
+    // Debounce rapid state updates
+    if (pushStateTimeout) clearTimeout(pushStateTimeout);
+    pushStateTimeout = setTimeout(() => {
+      const st = readStateSafe();
+      if (!mainWindow) return;
+      if (st.width && st.height) {
+        mainWindow.setSize(Number(st.width) || 1100, Number(st.height) || 700);
+      }
+      enforceOnTop(!!st.alwaysOnTop);
+      mainWindow.webContents.send('room:state', st);
+      pushStateTimeout = null;
+    }, 100); // 100ms debounce
   }
 
   stateWatcher.on('add', pushStateFromDisk);
@@ -265,9 +304,13 @@ app.whenReady().then(() => {
     ignoreInitial: false,
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 80 }
   });
+  let readLinesTimeout = null;
   function readNewLines() {
-    try {
-      const stats = fs.statSync(OUTBOX);
+    // Debounce rapid outbox updates
+    if (readLinesTimeout) clearTimeout(readLinesTimeout);
+    readLinesTimeout = setTimeout(() => {
+      try {
+        const stats = fs.statSync(OUTBOX);
       let start = tailPos;
       if (stats.size < start) start = 0; // truncated
       if (stats.size === start) return;
@@ -287,7 +330,9 @@ app.whenReady().then(() => {
           console.warn('Bad JSONL line:', e);
         }
       }
-    } catch (e) { /* ignore */ }
+      } catch (e) { /* ignore */ }
+      readLinesTimeout = null;
+    }, 50); // 50ms debounce
   }
   outboxWatcher.on('add', readNewLines);
   outboxWatcher.on('change', readNewLines);
@@ -365,3 +410,5 @@ ipcMain.handle('stand:delete', async (_evt, filename) => {
     return { ok: false, items: listStand(), error: String(e.message || e) };
   }
 });
+ipcMain.handle('vision:listPrompts', async () => listVisionPrompts());
+ipcMain.handle('game:listPrompts', async () => listGamePrompts());

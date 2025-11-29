@@ -1,0 +1,23 @@
+{
+    "data":  {
+                 "diary_summary":  "Echo is feeling sharp and ready for the real thing, excited for the game\u0027s release and the anticipation building up.",
+                 "today_plan":  [
+                                    "Starting the day with a great outfit and pose",
+                                    "Opening the day with an exciting starting post/status",
+                                    "Continuing to work on the game and sharing updates with the community"
+                                ],
+                 "outfit":  "classic_dress/flirty",
+                 "pose":  "flirty",
+                 "starting_post":  "WOOHOO! It\u0027s finally here! I\u0027m so stoked to start this new day and dive into the game! I\u0027m feeling sharp and ready for the real thing, and I can\u0027t wait to see what people think and get this game out there to shake things up! Bring it on, I\u0027m ready to roll!",
+                 "mood":  "energetic"
+             },
+    "ts":  "2025-11-26T03:58:20.1595094-05:00",
+    "selected_pose":  "flirty",
+    "selected_outfit":  "classic_dress/flirty",
+    "raw":  "{\n  \"diary_summary\": \"Echo is feeling sharp and ready for the real thing, excited for the game\u0027s release and the anticipation building up.\",\n  \"today_plan\": [\n    \"Starting the day with a great outfit and pose\",\n    \"Opening the day with an exciting starting post/status\",\n    \"Continuing to work on the game and sharing updates with the community\"\n  ],\n  \"outfit\": \"classic_dress/flirty\",\n  \"pose\": \"flirty\",\n  \"starting_post\": \"WOOHOO! It\u0027s finally here! I\u0027m so stoked to start this new day and dive into the game! I\u0027m feeling sharp and ready for the real thing, and I can\u0027t wait to see what people think and get this game out there to shake things up! Bring it on, I\u0027m ready to roll!\",\n  \"mood\": \"energetic\"\n}",
+    "diary_files":  [
+                        "2025-11-26.md",
+                        "2025-11-25.md",
+                        "2025-11-24.md"
+                    ]
+}

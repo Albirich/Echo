@@ -239,8 +239,19 @@ Return ONLY valid JSON for the requested plan. No markdown. No commentary. If un
       $modelPath = $null
       try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
       if (-not $modelPath) {
-        $g = Join-Path $home 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
-        if (Test-Path -LiteralPath $g) { $modelPath = $g } else { $modelPath = (Join-Path $home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf') }
+        $berghof   = Join-Path $home 'models\Berghof-NSFW-7B.Q4_K_M.gguf'
+        $darkIdol  = Join-Path $home 'models\s3nh-nsfw-noromaid-zephyr.Q4_K_M.gguf'
+        $mistralQ5 = Join-Path $home 'models\mistral-7b-uncensored\mistral-7b-uncensored-Q5_K_M.gguf'
+        $noromaidQ5= Join-Path $home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q5_K_M.gguf'
+        $noromaidQ4= Join-Path $home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
+        $gemma     = Join-Path $home 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
+        if     (Test-Path -LiteralPath $berghof)   { $modelPath = $berghof }
+        elseif (Test-Path -LiteralPath $darkIdol)  { $modelPath = $darkIdol }
+        elseif (Test-Path -LiteralPath $mistralQ5) { $modelPath = $mistralQ5 }
+        elseif (Test-Path -LiteralPath $noromaidQ5){ $modelPath = $noromaidQ5 }
+        elseif (Test-Path -LiteralPath $noromaidQ4){ $modelPath = $noromaidQ4 }
+        elseif (Test-Path -LiteralPath $gemma)     { $modelPath = $gemma }
+        else { $modelPath = $darkIdol }
       }
       $runner = Join-Path $home 'tools\Start-LocalLLM.ps1'
       $gpu = 35; $ctx = 4096

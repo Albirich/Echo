@@ -4,7 +4,7 @@
 param(
     [int]$Port = 8082,
     [string]$ListenHost = '127.0.0.1',
-    [int]$Gpu = 1   # zero-based GPU index (1 = second GPU)
+    [int]$Gpu = 1   # zero-based GPU index (1 = RX 580, frees up 3060 for main agent)
 )
 
 # Prefer a Vulkan-capable llama-server so we can run on the RX 580.
@@ -48,20 +48,19 @@ if (-not (Test-Path $MMProj)) {
 $serverArgs = @(
     '-m', $Model,
     '--mmproj', $MMProj,
-    '--alias', 'vision',                   # Name the model
-    '-ngl', '999',                         # All layers to GPU
-    '--device', ("Vulkan{0}" -f $Gpu),     # Select Radeon (GPU index)
-    '--main-gpu', $Gpu,                    # Bind to second GPU (index 1)
-    '-t', '4',                             # Threads
-    '-c', '2056',                          # Smaller ctx to fit RX 580 VRAM with 7B
-    '-b', '96',                            # Batch size
-    '-ub', '32',                           # Micro-batch size
-    '-kvu',                                # Disable unified KV to avoid extra slots
-    '-np', '1',                            # Force 1 parallel slot
+    '--no-mmproj-offload',                  # Keep vision encoder on CPU (RX 580 lacks fp16)
+    '--alias', 'vision',                    # Name the model
+    '-ngl', '999',                          # All LLM layers to GPU
+    '--device', ("Vulkan{0}" -f $Gpu),      # Select RX 580 (Vulkan1)
+    '--main-gpu', $Gpu,                     # Bind to GPU
+    '-t', '4',                              # Threads
+    '-c', 2048,                             # Context size
+    '-b', '128',                            # Batch size
+    '-ub', '32',                            # Micro-batch size
+    '-np', '1',                             # Force 1 parallel slot
     '--host', $ListenHost,
     '--port', $Port,
-    '--no-warmup',                         # Skip warmup to save memory spikes
-    '--log-disable'                        # Reduce console spam
+    '--log-disable'
 )
 
 Write-Host "Launching server..." -ForegroundColor Yellow
