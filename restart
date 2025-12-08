@@ -1,0 +1,66 @@
+#Restart IM
+$echoRoot = 'D:\Echo'   # adjust if needed
+
+# 1) Find and kill the current Start-IM.ps1 process
+Get-CimInstance Win32_Process |
+  Where-Object {
+    ($_.CommandLine -match 'Start-IM\.ps1') -or
+    ($_.CommandLine -match 'Start-IM.ps1')
+  } |
+  ForEach-Object {
+    Write-Host "Stopping IM brain PID $($_.ProcessId)..." -ForegroundColor Yellow
+    Stop-Process -Id $_.ProcessId -Force
+  }
+
+# 2) Start a fresh Echo brain in a new PowerShell window
+Start-Process powershell.exe -ArgumentList @(
+  '-NoExit',
+  '-ExecutionPolicy','Bypass',
+  '-File', (Join-Path $echoRoot 'Start-IM.ps1')
+)
+
+
+#Restart Echo
+$echoRoot = 'D:\Echo'   # adjust if needed
+
+# 1) Find and kill the current Start-IM.ps1 process
+Get-CimInstance Win32_Process |
+  Where-Object {
+    ($_.CommandLine -match 'Start-Echo\.ps1') -or
+    ($_.CommandLine -match 'Start-Echo.ps1')
+  } |
+  ForEach-Object {
+    Write-Host "Stopping Main brain PID $($_.ProcessId)..." -ForegroundColor Yellow
+    Stop-Process -Id $_.ProcessId -Force
+  }
+
+# 2) Start a fresh Echo brain in a new PowerShell window
+Start-Process powershell.exe -ArgumentList @(
+  '-NoExit',
+  '-ExecutionPolicy','Bypass',
+  '-File', (Join-Path $echoRoot 'Start-Echo.ps1')
+)
+
+
+
+
+#Restart vision
+$echoRoot = 'D:\Echo'   # adjust if needed
+
+# 1) Find and kill the current Start-visionserver.ps1 process
+Get-CimInstance Win32_Process |
+  Where-Object {
+    ($_.CommandLine -match 'Start-visionserver\.ps1') -or
+    ($_.CommandLine -match 'Start-visionserver.ps1')
+  } |
+  ForEach-Object {
+    Write-Host "Stopping visionserver PID $($_.ProcessId)..." -ForegroundColor Yellow
+    Stop-Process -Id $_.ProcessId -Force
+  }
+
+# 2) Start a fresh visionserver in a new PowerShell window
+Start-Process powershell.exe -ArgumentList @(
+  '-NoExit',
+  '-ExecutionPolicy','Bypass',
+  '-File', (Join-Path $echoRoot 'Start-visionserver.ps1')
+)

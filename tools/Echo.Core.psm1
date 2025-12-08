@@ -14,28 +14,28 @@ function Get-EchoHome {
 }
 
 function Get-EchoPaths {
-    param([string]$Home)
-    $home = Get-EchoHome $Home
+    param([string]$EchoHome)
+    $echoHome = Get-EchoHome $EchoHome
     return [pscustomobject]@{
-        Home                = $home
-        Logs                = Join-Path $home 'logs'
-        State               = Join-Path $home 'state'
-        UI                  = Join-Path $home 'ui'
-        Inbox               = Join-Path $home 'ui\inboxq'
-        Outbox              = Join-Path $home 'ui\outbox.jsonl'
-        WakePings           = Join-Path $home 'state\wakeup.pings.jsonl'
-        Context             = Join-Path $home 'state\context.json'
-        ContextHistory      = Join-Path $home 'state\context_history.jsonl'
-        ConversationHistory = Join-Path $home 'state\conversation_history.jsonl'
-        Emotion             = Join-Path $home 'state\emotion.vad.json'
-        Thoughts            = Join-Path $home 'state\im.thoughts.jsonl'
-        Wakeup              = Join-Path $home 'state\wakeup.json'
-        Diary               = Join-Path $home 'diary'
-        Schedule            = Join-Path $home 'data\schedule.json'
-        Stand               = Join-Path $home 'stand'
-        Models              = Join-Path $home 'models'
-        LastAvatar          = Join-Path $home 'state\last_avatar.json'
-        ScreenCaptionHistory = Join-Path $home 'state\screen.caption.history.json'
+        Home                = $echoHome
+        Logs                = Join-Path $echoHome 'logs'
+        State               = Join-Path $echoHome 'state'
+        UI                  = Join-Path $echoHome 'ui'
+        Inbox               = Join-Path $echoHome 'ui\inboxq'
+        Outbox              = Join-Path $echoHome 'ui\outbox.jsonl'
+        WakePings           = Join-Path $echoHome 'state\wakeup.pings.jsonl'
+        Context             = Join-Path $echoHome 'state\context.json'
+        ContextHistory      = Join-Path $echoHome 'state\context_history.jsonl'
+        ConversationHistory = Join-Path $echoHome 'state\conversation_history.jsonl'
+        Emotion             = Join-Path $echoHome 'state\emotion.vad.json'
+        Thoughts            = Join-Path $echoHome 'state\im.thoughts.jsonl'
+        Wakeup              = Join-Path $echoHome 'state\wakeup.json'
+        Diary               = Join-Path $echoHome 'diary'
+        Schedule            = Join-Path $echoHome 'data\schedule.json'
+        Stand               = Join-Path $echoHome 'stand'
+        Models              = Join-Path $echoHome 'models'
+        LastAvatar          = Join-Path $echoHome 'state\last_avatar.json'
+        ScreenCaptionHistory = Join-Path $echoHome 'state\screen.caption.history.json'
     }
 }
 
@@ -94,6 +94,33 @@ function Write-LogLine {
         data = $Data
     }
     Append-Jsonl -Path $file -Data $entry
+}
+
+function Test-SimilarPing {
+    param([string]$NewPing, [array]$RecentPings)
+    if (-not $NewPing -or -not $NewPing.Trim()) { return $false }
+    $new = $NewPing.Trim().ToLower()
+    foreach ($recent in $RecentPings) {
+        if (-not $recent) { continue }
+        $old = $recent.Trim().ToLower()
+        # Check for exact match
+        if ($new -eq $old) { return $true }
+        # Check for very similar (same key words)
+        $newWords = $new -split '\s+' | Where-Object { $_.Length -gt 3 }
+        $oldWords = $old -split '\s+' | Where-Object { $_.Length -gt 3 }
+        if ($newWords -and $oldWords) {
+            $matchCount = 0
+            foreach ($nw in $newWords) {
+                foreach ($ow in $oldWords) {
+                    if ($nw -eq $ow) { $matchCount++ }
+                }
+            }
+            # If more than 60% of significant words match, it's too similar
+            $similarity = $matchCount / [Math]::Max($newWords.Count, $oldWords.Count)
+            if ($similarity -gt 0.6) { return $true }
+        }
+    }
+    return $false
 }
 
 function Load-DiaryEntries {
@@ -206,12 +233,29 @@ function Load-ContextSnapshot {
             }
         } catch {}
     }
+    # Load recent wakeup pings and affect reasons to avoid repetition
+    $recentPings = @()
+    $recentReasons = @()
+    if ($Paths.WakePings -and (Test-Path -LiteralPath $Paths.WakePings)) {
+        try {
+            $pingLines = Get-Content -LiteralPath $Paths.WakePings -Encoding UTF8 | Select-Object -Last 10
+            foreach ($ln in $pingLines) {
+                try {
+                    $p = $ln | ConvertFrom-Json
+                    if ($p.content) { $recentPings += $p.content }
+                    if ($p.reason) { $recentReasons += $p.reason }
+                } catch {}
+            }
+        } catch {}
+    }
     return [pscustomobject]@{
         summary = $summary
         conversation = $convo
         mood = if ($emo) { $emo } else { $null }
         recent_thoughts = $recentThoughts
         screen_caption = $screenCaption
+        recent_wakeup_pings = $recentPings
+        recent_affect_reasons = $recentReasons
     }
 }
 
@@ -226,8 +270,32 @@ function Invoke-LlamaChat {
         [double]$Temperature = 0.7,
         [double]$TopP = 0.9,
         [int]$TimeoutSec = 240,
-        [switch]$JsonMode
+        [switch]$JsonMode,
+        [string]$Label = ''
     )
+    $failureLog = $null
+    if ($env:ECHO_HOME) {
+        $candidate = Join-Path $env:ECHO_HOME 'logs\llama.fail.jsonl'
+        $failureLog = $candidate
+    }
+    function Write-LlamaFailureLog {
+        param($Note, $RequestJson, $ResponseRaw)
+        if (-not $failureLog) { return }
+        try {
+            $entry = @{
+                ts      = (Get-Date).ToString('o')
+                label   = $Label
+                server  = $Server
+                model   = $Model
+                note    = $Note
+                request = $RequestJson
+                response= $ResponseRaw
+            }
+            $entry | ConvertTo-Json -Depth 10 -Compress | Add-Content -LiteralPath $failureLog -Encoding UTF8
+        } catch {
+            # best-effort logging only
+        }
+    }
     if (-not $Server) { $Server = 'http://127.0.0.1:8080' }
     $uri = ($Server.TrimEnd('/')) + '/v1/chat/completions'
     $msgs = @()
@@ -258,9 +326,10 @@ function Invoke-LlamaChat {
     }
 
     $json = $body | ConvertTo-Json -Depth 10 -Compress
+    $jsonBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($json)
     Write-Verbose "LlamaChat Request: $json"
     try {
-        $resp = Invoke-RestMethod -Method Post -Uri $uri -Body $json -ContentType 'application/json' -TimeoutSec $TimeoutSec
+        $resp = Invoke-RestMethod -Method Post -Uri $uri -Body $jsonBytes -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec
         if ($resp -and $resp.choices -and $resp.choices.Count -gt 0) {
             $msg = $resp.choices[0].message
             if ($msg -and $msg.content) { return $msg.content }
@@ -268,11 +337,16 @@ function Invoke-LlamaChat {
             if ($msg -and $msg.tool_calls) { return ($msg.tool_calls | ConvertTo-Json -Depth 10 -Compress) }
             return ($msg | ConvertTo-Json -Depth 10 -Compress)
         }
-        # Response was successful but had no choices
-        Write-Warning "LlamaChat: Response received but no choices returned. Response: $($resp | ConvertTo-Json -Compress)"
-        return $null
+        # Response was successful but had no choices; surface the raw payload to the caller
+        $raw = ''
+        try { $raw = $resp | ConvertTo-Json -Depth 10 -Compress } catch { $raw = [string]$resp }
+        $msg = if ($raw) { "LlamaChat: Response received but no choices returned. Raw: $raw" } else { "LlamaChat: Response received but no choices returned." }
+        Write-LlamaFailureLog -Note 'no_choices' -RequestJson $json -ResponseRaw $raw
+        Write-Warning $msg
+        throw [InvalidOperationException]::new($msg)
     } catch {
         # Log the actual error before returning null
+        Write-LlamaFailureLog -Note ("exception: {0}" -f $_.Exception.Message) -RequestJson $json -ResponseRaw ''
         Write-Warning "LlamaChat failed: $($_.Exception.Message)"
         Write-Warning "URI: $uri"
         throw

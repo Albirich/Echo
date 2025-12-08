@@ -16,6 +16,13 @@
       "rate_limit": { "per_min": 12 }
     },
     {
+      "name": "memory.search",
+      "desc": "Search deep memory by tag. this will NOT find id's or info on notes or other information about features. memory is strictly facts you learned about the world.",
+      "params": { "tag": "string", "limit": "int?" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 20 }
+    },
+    {
       "name": "room.set_background",
       "desc": "Set wallpaper image (copied into decor/).",
       "params": { "src": "string" },
@@ -30,6 +37,20 @@
       "params": { "text": "string", "x": "int?", "y": "int?", "color": "string?" },
       "requires_confirm": false,
       "rate_limit": { "per_min": 10 }
+    },
+    {
+      "name": "room.delete_note",
+      "desc": "Delete a sticky note by id. You MUST find a notes id with room.list_notes tool call first",
+      "params": { "id": "string?", "text": "string?" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 10 }
+    },
+    {
+      "name": "room.list_notes",
+      "desc": "List notes/stickies currently in the room. Used to get the information about all the notes; including id, text, and location.",
+      "params": {},
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 30 }
     }
   ]
 }

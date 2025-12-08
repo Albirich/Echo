@@ -146,7 +146,7 @@ Write a diary entry that feels alive and reflective. Mention emotions and any pr
 
   Write-LogLine -Component 'diary' -Kind 'llm.prompt' -Data @{ server=$env:ECHO_MAIN_SERVER; model='main'; max_tokens=320; temperature=0.65; system=$system; user=$user } -LogRoot $paths.Logs
   $entry = $null
-  try { $entry = Invoke-LlamaChat -Server $env:ECHO_MAIN_SERVER -Model 'main' -System $system -User $user -MaxTokens 320 -Temperature 0.65 } catch {
+  try { $entry = Invoke-LlamaChat -Server $env:ECHO_MAIN_SERVER -Model 'main' -System $system -User $user -MaxTokens 320 -Temperature 0.65 -Label 'stop-echo' } catch {
     Warn ("Diary generation failed: {0}" -f $_.Exception.Message)
     Write-LogLine -Component 'diary' -Kind 'llm.error' -Data @{ server=$env:ECHO_MAIN_SERVER; model='main'; error=$_.Exception.Message; stack=$_.Exception.ToString() } -LogRoot $paths.Logs
     return
@@ -264,6 +264,7 @@ function Stop-All {
                 $_.ExecutablePath -like "$echoRoot*" -or
                 $_.CommandLine -match '(?i)Stop-Echo(All)?' -or
                 $_.CommandLine -match '(?i)Start-(EchoAll|Echo|IM|VisionProbe|VisionProbe-Lite|VisionProbe-Server|VisionProbe-Burst|EchoRoom|VisionServer|Reflector|Echoback|ResidentLLM)' -or
+                $_.CommandLine -match '(?i)SkillsLoop\.ps1' -or
                 $_.CommandLine -match '(?i)Start-WhisperStreamToInbox'
             )
         }

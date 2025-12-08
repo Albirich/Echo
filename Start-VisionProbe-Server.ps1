@@ -54,7 +54,7 @@ $serverArgs = @(
     '--device', ("Vulkan{0}" -f $Gpu),      # Select Radeon (GPU index)
     '--main-gpu', $Gpu,                     # Bind to second GPU (index 1)
     '-t', '4',                              # Threads
-    '-c', '4096',                           # Context size (images need ~2700 tokens)
+    '-c', '3596',                           # Context size (images need ~2700 tokens)
     '-b', '128',                            # Batch size
     '-ub', '32',                            # Micro-batch size
     '-np', '1',                             # Force 1 parallel slot

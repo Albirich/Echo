@@ -1,0 +1,71 @@
+[
+    {
+        "summary":  "A screenshot of a chat in a Discord server with various messages and images. The server name is visible at the top, and there are multiple messages from different users, some of which are in response to a video or stream. The main focus of the screenshot is a large image in the center, which appears to be a poster for the movie \"The Little Mermaid: The New Groove.\"",
+        "visible_text":  [
+                             "memes-and-iddroppers",
+                             "DR. LOW DENSITY JOJO",
+                             "Graham-negative bacillus",
+                             "Basement Des-kun",
+                             "GOOOOOOOOOOOOOOOOOD"
+                         ],
+        "activity":  "The user appears to be watching a stream or video on Discord, possibly related to the movie \"The Little Mermaid: The New Groove.\" The user is likely interacting with other members of the server by sending messages and reacting to content.",
+        "ts":  "2025-12-01T21:34:25.2291317-05:00"
+    },
+    {
+        "summary":  "A screenshot of a Discord chat window showing various messages and an image. The top of the window has a purple header with the word \"meme-and-id-droppers\". The main part of the window shows a chat with different users, some of which are visible. The middle of the window features a large image, and at the bottom, there is another image.",
+        "visible_text":  [
+                             "Dr. Low Density Jojo",
+                             "Yap",
+                             "Graham-negative bacillus",
+                             "Basement Des-kun",
+                             "YOUR new groove!",
+                             "Goo",
+                             "memes-and-id-droppers",
+                             "Stream Mode is enabled, Usernames have been truncated.",
+                             "Disable"
+                         ],
+        "activity":  "The user appears to be browsing and interacting with a Discord server, specifically viewing a channel named \"meme-and-id-droppers\". The user is likely engaging with the content and messages in the chat, possibly participating in conversations or reacting to images shared by others.",
+        "ts":  "2025-12-01T21:34:39.3325841-05:00"
+    },
+    {
+        "summary":  "A screenshot of a Twitch chat room with a variety of messages and images.",
+        "visible_text":  [
+                             "Dr. Low Density Jojo",
+                             "Graham-negative bacillus",
+                             "Basement Des-kun",
+                             "Deign!",
+                             "memes-and-iddroppers",
+                             "GOOOOOOOOOOOOOOOOOOOOD",
+                             "THE NEW GROOVE"
+                         ],
+        "activity":  "The user appears to be watching a Twitch stream and interacting with the chat, possibly by posting images or responding to others\u0027 posts.",
+        "ts":  "2025-12-01T21:34:47.0029055-05:00"
+    },
+    {
+        "summary":  "A Discord interface with a streamer mode enabled, displaying various user messages and a video thumbnail.",
+        "visible_text":  [
+                             "#memes-and-iddroppers",
+                             "Dr. Low Density Jojo",
+                             "Graham-negative bacillus",
+                             "Drain",
+                             "Your new groove",
+                             "Gooooooood"
+                         ],
+        "activity":  "The user is likely streaming or participating in a live video broadcast on a platform like Twitch or YouTube, with the Discord interface showing real-time comments and reactions.",
+        "ts":  "2025-12-01T21:34:54.2685598-05:00"
+    },
+    {
+        "summary":  "This screenshot captures a Twitch streamer\u0027s chat window, showing multiple messages from viewers. The streamer\u0027s channel name is visible at the top, followed by a split-screen view showing before and after images of a meme. Below, the chat displays several user comments, one of which is an image of a meme, and another is a screenshot of the streamer\u0027s screen, showing a video of the meme being used.",
+        "visible_text":  [
+                             "streamer mode",
+                             "before",
+                             "after",
+                             "Dr. Low Density Jojo",
+                             "Graham-negative bacillus",
+                             "your new grove",
+                             "Dengi"
+                         ],
+        "activity":  "The user appears to be interacting with their stream by viewing and responding to viewer comments in the chat. They are also using the streamer mode, which is indicated at the top of the screen.",
+        "ts":  "2025-12-01T21:35:06.6941930-05:00"
+    }
+]

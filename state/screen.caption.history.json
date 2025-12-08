@@ -1,62 +1,78 @@
 [
     {
-        "summary":  "A screenshot of a Discord chat conversation with three messages from different users.",
+        "summary":  "A screenshot of the Gemini AI interface, showing the left sidebar menu and the main workspace. The user is accessing the \"Accessing GitHub Repositories\" section.",
         "visible_text":  [
-                             "not tonight, boutta eat then probably lay down",
-                             "Should be free tomorrow or sometime next week tho",
-                             "ok",
-                             "way the game works is everyones got words we cant say and if anyone says it you get hurt. the item",
-                             "ohh nice I think I saw an ad for that"
+                             "Gemini",
+                             "New chat",
+                             "My Stuff",
+                             " Gems",
+                             "Chats",
+                             "Accessing GitHub Repositories",
+                             "Multi-step delivery route",
+                             "Route Optimization Request",
+                             "Google Maps Functionality",
+                             "Start-EchoAll",
+                             "PS1",
+                             "before we do that let me show you how we start everything",
+                             "Optimizing Model Swap",
+                             "Ask Gemini",
+                             "Tools",
+                             "Gemini can make mistakes, so double-check it"
                          ],
-        "activity":  "The user is reading a conversation in a Discord chat.",
-        "ts":  "2025-11-29T02:48:09.2791484-05:00"
+        "activity":  "The user is navigating and interacting with the Gemini AI interface, focusing on the GitHub repositories section.",
+        "ts":  "2025-12-07T23:37:52.1186839-05:00"
     },
     {
-        "summary":  "A screenshot of a Discord conversation with three messages from different users discussing a game and an ad.",
+        "summary":  "",
         "visible_text":  [
-                             "not tonight, boutta eat then probably lay down",
-                             "Should be free tomorrow or sometime next week tho",
-                             "ok",
-                             "way the game works is everyones got words we cant say and if anyone says it you get hurt. the item",
-                             "ohh nice I think I saw an ad for that"
+
                          ],
-        "activity":  "The user appears to be engaging in a conversation about a game, discussing its mechanics and an advertisement they saw.",
-        "ts":  "2025-11-29T02:48:18.0597165-05:00"
+        "activity":  "",
+        "ts":  "2025-12-07T23:38:51.1993869-05:00"
     },
     {
-        "summary":  "A screenshot of a Discord chat with three messages from different users.",
+        "summary":  "The screenshot shows a Gemini interface, specifically the \"Accessing GitHub Repositories\" section. The interface displays code snippets and instructions related to modifying a PowerShell script in the \"Start-EchoAll.ps1\" file to load the correct planner.",
         "visible_text":  [
-                             "not tonight, boutta eat then probably lay down",
-                             "Should be free tomorrow or sometime next week tho",
-                             "ok",
-                             "way the game works is everyones got words we cant say and if anyone says it you get hurt. the item",
-                             "ohh nice I think I saw an ad for that"
+                             "Accessing GitHub Repositories",
+                             "Start-EchoAll.ps1",
+                             "Model paths (fallback to defaults)",
+                             "IF (not $env:ECOH_SMALL_MODEL_PATH",
+                             "Ask Gemini",
+                             "Gemini can make mistakes, so double-check it",
+                             "The Fix",
+                             "The section \"Model paths (fallback to defaults)\" [around line 100]"
                          ],
-        "activity":  "The user is viewing a conversation on Discord.",
-        "ts":  "2025-11-29T02:48:24.8075656-05:00"
+        "activity":  "The user appears to be modifying or reviewing code related to GitHub repositories and PowerShell scripts.",
+        "ts":  "2025-12-07T23:39:42.3674489-05:00"
     },
     {
-        "summary":  "A screenshot of a Discord chat with three messages from different users discussing their plans and a game rule.",
+        "summary":  "A user is accessing GitHub repositories in the Gemini AI application. The user is currently viewing the \u0027Accessing GitHub Repositories\u0027 page and is focused on modifying a PowerShell script to load the correct planner on a small server.",
         "visible_text":  [
-                             "not tonight, boutta eat then probably lay down",
-                             "Should be free tomorrow or sometime next week tho",
-                             "ok",
-                             "way the game works is everyones got words we cant say and if anyone says it you get hurt. the item",
-                             "ohh nice I think I saw an ad for that"
+                             "Accessing GitHub Repositories",
+                             "Currently, it is loading llama-1llama-2 on Port 8081 (the \"Small\" server).",
+                             "Because Start-EchoAll.ps1 defines the environment, we need to change it here so that Port 8081 runs AgentFlow instead of Nidum.",
+                             "Here is how to modify Start-EchoAll.ps1 to load the correct planner.",
+                             "The Fix: Open: Start-EchoAll.ps1 Find: The section \"Model paths (fallback to defaults)\" (around line 130). Replace: The ECHO_SMALL_MODEL_PATH and ECHO_SMALL_MODEL_NAME blocks with the code below.",
+                             "PowerShell",
+                             "# Model paths (fallback to defaults)",
+                             "if (-not $env:ECHO_SMALL_MODEL_PATH)",
+                             "  # --- CHANGES: Update the alias to match the filename so Start-Echo finds it ---",
+                             "  if (-not $env:ECHO_SMALL_MODEL_NAME) { $env:ECHO_SMALL_MODEL_NAME = \"AgentFlow_agentflow-p\" }",
+                             "  if (-not $env:ECHO_MAIN_MODEL_PATH) { $env:ECHO_MAIN_MODEL_PATH = $env:ECHO_MAIN_MODEL_PATH }",
+                             "What this does",
+                             "1. Swaps the Model: It tells llama-server on Port 8081 to load AgentFlow...ps1p instead",
+                             "Ask Gemini",
+                             "Gemini can make mistakes, so double-check it"
                          ],
-        "activity":  "The user is likely engaging in a conversation about their daily plans and a game they are playing.",
-        "ts":  "2025-11-29T02:48:32.6420978-05:00"
+        "activity":  "The user is modifying a PowerShell script in the Gemini AI application to adjust the loading of a planner on a small server.",
+        "ts":  "2025-12-07T23:40:48.8600737-05:00"
     },
     {
-        "summary":  "A screenshot of a Discord chat with three messages from different users.",
+        "summary":  "",
         "visible_text":  [
-                             "not tonight, boutta eat then probably lay down",
-                             "Should be free tomorrow or sometime next week tho",
-                             "ok",
-                             "way the game works is everyones got words we cant say and if anyone says it you get hurt. the item",
-                             "ohh nice I think I saw an ad for that"
+
                          ],
-        "activity":  "The user is reading a conversation on Discord.",
-        "ts":  "2025-11-29T02:48:39.1460530-05:00"
+        "activity":  "",
+        "ts":  "2025-12-07T23:41:56.7003593-05:00"
     }
 ]

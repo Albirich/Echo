@@ -67,7 +67,7 @@ $visionServerUrl = if ($env:ECHO_VISION_SERVER_URL -and $env:ECHO_VISION_SERVER_
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing         -ErrorAction SilentlyContinue
 
-[int]$displayIndex = 0
+[int]$displayIndex = 2
 if ($env:ECHO_VISION_DISPLAY) {
   [void][int]::TryParse($env:ECHO_VISION_DISPLAY, [ref]$displayIndex)
 }
@@ -113,7 +113,7 @@ function Invoke-VisionServer {
   param(
     [Parameter(Mandatory=$true)][string]$ImagePath,
     [Parameter(Mandatory=$true)][string]$Prompt,
-    [int]$ResizeWidth = 560
+    [int]$ResizeWidth = 800
   )
 
   if (-not (Test-Path -LiteralPath $ImagePath)) {
@@ -172,8 +172,8 @@ function Invoke-VisionServer {
         )
       }
     )
-    max_tokens  = 200
-    temperature = 0.2
+    max_tokens  = 400
+    temperature = 0.7
   } | ConvertTo-Json -Depth 8
 
   $url = $visionServerUrl.TrimEnd('/') + '/v1/chat/completions'
@@ -220,7 +220,12 @@ function Invoke-VisionServer {
 function Get-CaptionPrompt {
 @"
 Analyze this screenshot and respond with ONLY this JSON format (no markdown, no extra text):
-{"summary": "2-3 sentence description of what's visible", "visible_text": ["text1", "text2", "text3"], "activity": "what the user appears to be doing"}
+{"summary": "2-3 sentence description of what's visible", 
+"visible_text": ["text1", "text2", "text3"], 
+"activity": "what the user appears to be doing"}
+
+Be descriptive and detailed.
+Use explicit and vular language when needed.
 "@
 }
 
