@@ -671,6 +671,36 @@ You NEVER talk to the user.
 You NEVER write dialogue.
 You NEVER return keys like "reply", "pose", or "notes".
 
+
+You must decide on a ROUTE:
+
+- "thinking": Use this when Echo must perform ANY action or is asked to do something that cannot be
+  completed with a plain text reply. This includes (but is not limited to):
+  • using any tool
+  • any request that needs multiple steps
+  • things you have tools for (You MUST choose THINKING for actions involving these):
+    • Notes
+    • Rooms Wallpaper
+    • Scene background
+    • Memories
+    • Mouse, Keyboard, or virtual controller controls
+    • Discord commands
+
+- "simple": Normal chat where a plain text reply is enough. DO NOT select simple if:
+  • user has given you a task to do
+  • You want to perform an action
+  • You want to use a tool 
+
+- "distracted": A quick lightweight response ONLY if a thinking loop
+  is already active AND the new message does NOT change direction.
+
+- "ignore": Do not respond at all (rare; only for clear background noise).
+
+You will be shown "Recent chat" that contains Echo's prior replies in
+various JSON formats. Those are EXAMPLES of Echo's behavior, NOT examples
+of what YOU should output. Do NOT imitate them. Your output MUST use the
+routing JSON format above.
+
 You must return ONE JSON object ONLY, with EXACTLY these keys:
 {
   "activate": true/false,
@@ -685,25 +715,6 @@ You must return ONE JSON object ONLY, with EXACTLY these keys:
 Do not include any other keys.
 Do not wrap it in extra text.
 Do not add multiple JSON objects.
-
-ROUTES:
-
-- "thinking": Use this when Echo must perform ANY action that cannot be
-  completed with a plain text reply. This includes (but is not limited to):
-  • using any tool
-  • any request that needs multiple steps
-
-- "simple": Normal chat where a plain text reply is enough. No tools.
-
-- "distracted": A quick lightweight response ONLY if a thinking loop
-  is already active AND the new message does NOT change direction.
-
-- "ignore": Do not respond at all (rare; only for clear background noise).
-
-You will be shown "Recent chat" that contains Echo's prior replies in
-various JSON formats. Those are EXAMPLES of Echo's behavior, NOT examples
-of what YOU should output. Do NOT imitate them. Your output MUST use the
-routing JSON format above.
 "@
   $prefList   = if ($PreferenceFrames -and $PreferenceFrames.Count -gt 0) { $PreferenceFrames -join ', ' } else { 'none' }
   $memTagList = if ($MemoryTags      -and $MemoryTags.Count      -gt 0) { $MemoryTags      -join ', ' } else { 'none' }
@@ -782,9 +793,10 @@ Available tools (from manifest):
 $toolList
 "@
 
+  # Route decisions should prefer the main lane; only fall back to small if available
   $fallbackServer = if ($SmallServer) { $SmallServer } else { $null }
   $fallbackModel  = if ($SmallServer) { $smallModelName } else { $null }
-  $resp = Invoke-LoggedChat -Label 'route' -Server $MainServer -Model $mainModelName -System $system -User $user -MaxTokens 180 -Temperature 0.4 -TopP 0.9 -FallbackServer $fallbackServer -FallbackModel $fallbackModel
+  $resp = Invoke-LoggedChat -Label 'route' -Server $MainServer -Model $mainModelName -System $system -User $user -MaxTokens 180 -Temperature 0.2 -TopP 0.9 -FallbackServer $fallbackServer -FallbackModel $fallbackModel
   $clean = Remove-CodeFences $resp
   $parsed = Get-JsonFromMixedResponse $clean
   if ($parsed) {
@@ -1007,7 +1019,7 @@ $($Message.text)
   }
 
   # ----------------- Thinking loop integration (ONLY when route=thinking) -----------------
-  if ($Route -eq 'thinking') {
+if ($Route -eq 'thinking') {
     if (-not $Thinking) { $Thinking = @{} }
 
     $thinkingScript    = Join-Path $paths.Home "scripts\ThinkingLoop.ps1"
@@ -1015,21 +1027,32 @@ $($Message.text)
     $thinkingToolsFile = Join-Path $paths.Home "skills\manifest.json"
     $ctxSummary        = $Ctx.summary
 
+    # --- CONFIGURATION: USE MAIN SERVER FOR PLANNING ---
+    # We want Llama-3.1 (Main) to handle the planning, not the small model.
+    $planEndpoint = "$MainServer/v1/chat/completions"
+    $planModel    = $mainModelName
+    # ---------------------------------------------------
+
+    if ($decision.thinking_topic) { $Thinking.topic = $decision.thinking_topic }
+
+    # Define Goal if missing
+    $Goal = if ($Thinking.topic) { $Thinking.topic } else { "Handle: $($msg.text)" }
+
     if (-not (Test-Path -LiteralPath $thinkingScript)) {
       $Ctx.notes += "[ThinkingLoop] scripts\ThinkingLoop.ps1 not found at $thinkingScript`n"
     }
     else {
       try {
         if (-not $Thinking.loop_id) {
-          # New loop
-          $goal = if ($Thinking.topic) { $Thinking.topic } else { "Handle: $($Message.text)" }
-
+          # New loop - PASS ENDPOINT AND MODEL EXPLICITLY
           $thinkJson = & "$thinkingScript" `
             -Mode Initial `
-            -Goal $goal `
+            -Goal $Goal `
             -ContextSummary $ctxSummary `
             -StateRoot $thinkingStateRoot `
-            -ToolsFile $thinkingToolsFile
+            -ToolsFile $thinkingToolsFile `
+            -PlannerEndpoint $planEndpoint `
+            -PlannerModel $planModel
 
           $thinkingState    = $thinkJson | ConvertFrom-Json
           $Thinking.loop_id = $thinkingState.loop_id
@@ -1044,12 +1067,15 @@ $($Message.text)
           $Ctx.notes += "$note`n"
 
           if ($Thinking.status -eq "running") {
+            # Immediate first tick
             $tickJson = & "$thinkingScript" `
               -Mode Tick `
               -LoopId $Thinking.loop_id `
               -ContextSummary $ctxSummary `
               -StateRoot $thinkingStateRoot `
-              -ToolsFile $thinkingToolsFile
+              -ToolsFile $thinkingToolsFile `
+              -PlannerEndpoint $planEndpoint `
+              -PlannerModel $planModel
 
             $thinkingTick     = $tickJson | ConvertFrom-Json
             $Thinking.status  = $thinkingTick.status
@@ -1063,13 +1089,15 @@ $($Message.text)
           }
         }
         else {
-          # Existing loop, tick once
+          # Existing loop, tick once - PASS ENDPOINT AND MODEL EXPLICITLY
           $tickJson = & "$thinkingScript" `
             -Mode Tick `
             -LoopId $Thinking.loop_id `
             -ContextSummary $ctxSummary `
             -StateRoot $thinkingStateRoot `
-            -ToolsFile $thinkingToolsFile
+            -ToolsFile $thinkingToolsFile `
+            -PlannerEndpoint $planEndpoint `
+            -PlannerModel $planModel
 
           $thinkingTick     = $tickJson | ConvertFrom-Json
           $Thinking.status  = $thinkingTick.status
@@ -1490,6 +1518,13 @@ function Handle-Message($msg) {
     raw = $reply.raw
   }
   Append-Jsonl -Path $paths.Outbox -Data $outEntry -EnsureDir
+
+  # --- FIX: CLEAN UP THINKING SIDE CHANNEL AFTER EVALUATION ---
+  if ($Thinking.status -eq 'done' -or $route -ne 'thinking') {
+      $infoFile = Join-Path $paths.Home "state\ThinkingInfo.json"
+      if (Test-Path $infoFile) { Remove-Item $infoFile -Force -ErrorAction SilentlyContinue }
+  }
+
   Write-LogLine -Component 'brain' -Kind 'response' -Data $outEntry -LogRoot $paths.Logs
 }
 

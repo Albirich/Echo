@@ -26,6 +26,8 @@ $Root = $env:ECHO_ROOT
 $SkillDir    = Join-Path $Root 'ui'
 $SkillOutbox = Join-Path $SkillDir 'skills.outbox.jsonl'
 $SkillInbox  = Join-Path $SkillDir 'skills.inbox.jsonl'
+$StateFile   = Join-Path $Root 'ui\state.json'
+$OutboxCursorPath = Join-Path $Root 'state\skills.outbox.cursor'
 
 if (-not (Test-Path $SkillDir)) {
     New-Item -ItemType Directory -Force -Path $SkillDir | Out-Null
@@ -37,7 +39,9 @@ if (-not (Test-Path $LogDir)) {
 }
 $SkillsLog   = Join-Path $LogDir 'skills.runtime.log.jsonl'
 
-$DeepMemPath = Join-Path $Root 'memory\deep.json'
+$DeepMemPathJson  = Join-Path $Root 'memory\deep.json'
+$DeepMemPathJsonl = Join-Path $Root 'memory\deep.jsonl'
+$ThinkingInfoFile = Join-Path $Root 'state\ThinkingInfo.json'
 
 # Ephemeral note store (for planner testing).
 # You can later swap this to your real notes backend.
@@ -78,21 +82,61 @@ function Write-JsonlLine {
     Add-Content -Path $Path -Value $line
 }
 
+function Load-OutboxCursor {
+    if (-not (Test-Path $OutboxCursorPath)) {
+        return @{ line = 0; length = 0 }
+    }
+    try {
+        $raw = Get-Content -Raw -Path $OutboxCursorPath -ErrorAction Stop
+        $obj = $raw | ConvertFrom-Json
+        return @{
+            line   = [int]$obj.line
+            length = [long]$obj.length
+        }
+    } catch {
+        return @{ line = 0; length = 0 }
+    }
+}
+
+function Save-OutboxCursor {
+    param([int]$Line, [long]$Length)
+    $dir = Split-Path -Parent $OutboxCursorPath
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    @{ line = $Line; length = $Length } |
+        ConvertTo-Json -Compress |
+        Set-Content -Encoding UTF8 -Path $OutboxCursorPath
+}
+
 function Load-DeepMemory {
-    if (-not (Test-Path $DeepMemPath)) {
-        return @()
+    $items = @()
+
+    if (Test-Path $DeepMemPathJsonl) {
+        try {
+            $lines = Get-Content -Path $DeepMemPathJsonl -ErrorAction Stop
+            foreach ($line in $lines) {
+                if (-not $line.Trim()) { continue }
+                try { $items += ($line | ConvertFrom-Json) } catch {}
+            }
+        } catch {
+            Log-Json -Event 'deep_memory_parse_error' -Data @{
+                error = $_.Exception.Message
+                path  = $DeepMemPathJsonl
+            }
+        }
+    }
+    elseif (Test-Path $DeepMemPathJson) {
+        try {
+            $raw = Get-Content -Raw -Path $DeepMemPathJson -ErrorAction Stop | ConvertFrom-Json
+            $items += @($raw)
+        } catch {
+            Log-Json -Event 'deep_memory_parse_error' -Data @{
+                error = $_.Exception.Message
+                path  = $DeepMemPathJson
+            }
+        }
     }
 
-    try {
-        $raw = Get-Content -Raw -Path $DeepMemPath | ConvertFrom-Json
-        return @($raw)
-    } catch {
-        Log-Json -Event 'deep_memory_parse_error' -Data @{
-            error = $_.Exception.Message
-            path  = $DeepMemPath
-        }
-        return @()
-    }
+    return $items
 }
 
 function Save-DeepMemory {
@@ -100,12 +144,64 @@ function Save-DeepMemory {
         [object[]]$Items
     )
 
-    $json = $Items | ConvertTo-Json -Depth 10
-    $dir  = Split-Path -Parent $DeepMemPath
+    $dir  = Split-Path -Parent $DeepMemPathJsonl
     if (-not (Test-Path $dir)) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
-    $json | Set-Content -Encoding UTF8 -Path $DeepMemPath
+
+    if (Test-Path $DeepMemPathJsonl) {
+        $lines = @()
+        foreach ($item in $Items) { $lines += ($item | ConvertTo-Json -Depth 10 -Compress) }
+        Set-Content -Encoding UTF8 -Path $DeepMemPathJsonl -Value $lines
+    }
+    else {
+        $json = $Items | ConvertTo-Json -Depth 10
+        $json | Set-Content -Encoding UTF8 -Path $DeepMemPathJson
+    }
+}
+
+function Write-SideChannel {
+    param(
+        [string]$Source,
+        [object]$Data
+    )
+
+    try {
+        $dir = Split-Path -Parent $ThinkingInfoFile
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $payload = @{ source = $Source; ts = (Get-Date).ToString("o"); data = $Data }
+        $json = $payload | ConvertTo-Json -Depth 10
+        Set-Content -Path $ThinkingInfoFile -Value $json -Force
+    } catch {
+        Log-Json -Event 'sidechannel_error' -Data @{ source = $Source; error = $_.Exception.Message }
+    }
+}
+
+function Get-StateJson {
+    if (-not (Test-Path $StateFile)) { return $null }
+    $retries = 0
+    while ($retries -lt 5) {
+        try {
+            $fs = [System.IO.File]::Open($StateFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $sr = New-Object System.IO.StreamReader($fs)
+            $raw = $sr.ReadToEnd()
+            $sr.Close(); $fs.Close()
+            if (-not $raw.Trim()) { return $null }
+            return $raw | ConvertFrom-Json
+        } catch {
+            Start-Sleep -Milliseconds 50
+            $retries++
+        }
+    }
+    return $null
+}
+
+function Save-StateJson {
+    param([object]$JsonObj)
+    $dir = Split-Path -Parent $StateFile
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $json = $JsonObj | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($StateFile, $json, [System.Text.Encoding]::UTF8)
 }
 
 # -------------------------------
@@ -133,6 +229,8 @@ function Invoke-MemorySearch {
             if ($matches.Count -ge $limit) { break }
         }
     }
+
+    Write-SideChannel -Source 'memory.search' -Data $matches
 
     return @{
         matches = $matches
@@ -214,7 +312,32 @@ function Invoke-RoomAddNote {
         created_at = (Get-Date).ToString('o')
     }
 
-    $script:Notes += $note
+    $state = Get-StateJson
+    if (-not $state) { $state = [pscustomobject]@{} }
+
+    $items = @()
+    $target = $null
+    if ($state.PSObject.Properties.Name -contains 'widgets' -and $state.widgets) {
+        $items += @($state.widgets)
+        $target = 'widgets'
+    }
+    elseif ($state.PSObject.Properties.Name -contains 'notes' -and $state.notes) {
+        $items += @($state.notes)
+        $target = 'notes'
+    }
+    else {
+        $target = 'widgets'
+    }
+
+    # Ensure we keep an array shape even with a single item
+    $list = [System.Collections.ArrayList]::new()
+    foreach ($i in $items) { [void]$list.Add($i) }
+    [void]$list.Add($note)
+
+    if ($state.PSObject.Properties.Name -contains $target) { $state.$target = $list }
+    else { $state | Add-Member -MemberType NoteProperty -Name $target -Value $list -Force }
+
+    Save-StateJson $state
 
     return @{
         note = $note
@@ -226,9 +349,14 @@ function Invoke-RoomListNotes {
         [pscustomobject]$Params
     )
 
-    return @{
-        notes = $script:Notes
-    }
+    $state = Get-StateJson
+    $notes = @()
+    if ($state -and $state.widgets) { $notes += @($state.widgets) }
+    elseif ($state -and $state.notes) { $notes += @($state.notes) }
+
+    Write-SideChannel -Source 'room.list_notes' -Data $notes
+
+    return @{ notes = $notes }
 }
 
 function Invoke-RoomDeleteNote {
@@ -237,9 +365,22 @@ function Invoke-RoomDeleteNote {
     )
 
     $id = $Params.id
-    $before = $script:Notes.Count
-    $script:Notes = $script:Notes | Where-Object { $_.id -ne $id }
-    $after = $script:Notes.Count
+    $state = Get-StateJson
+    $items = @()
+    $target = $null
+    if ($state -and $state.widgets) { $items += @($state.widgets); $target = 'widgets' }
+    elseif ($state -and $state.notes) { $items += @($state.notes); $target = 'notes' }
+
+    $before = $items.Count
+    $remaining = $items | Where-Object { $_.id -ne $id }
+    if ($target) {
+        $list = [System.Collections.ArrayList]::new()
+        foreach ($r in $remaining) { [void]$list.Add($r) }
+        if ($state.PSObject.Properties.Name -contains $target) { $state.$target = $list }
+        else { $state | Add-Member -MemberType NoteProperty -Name $target -Value $list -Force }
+        Save-StateJson $state
+    }
+    $after = $remaining.Count
 
     return @{
         deleted      = ($before - $after) -gt 0
@@ -336,12 +477,25 @@ Write-Host "[SkillRuntime] Inbox : $SkillInbox"
 
 # Track which request_ids we've already processed
 $processed = New-Object System.Collections.Generic.HashSet[string]
+$cursor = Load-OutboxCursor
+$lastProcessedLine = [int]$cursor.line
+$lastOutboxLength  = [long]$cursor.length
 
 while ($true) {
     try {
         if (Test-Path $SkillOutbox) {
+            $outboxStat = Get-Item -LiteralPath $SkillOutbox -ErrorAction SilentlyContinue
             $lines = Get-Content -Path $SkillOutbox -ErrorAction SilentlyContinue
-            foreach ($line in $lines) {
+            if (-not $lines) { $lines = @() }
+
+            # Reset cursor if file was truncated/rotated
+            if (($outboxStat -and $outboxStat.Length -lt $lastOutboxLength) -or ($lines.Count -lt $lastProcessedLine)) {
+                $lastProcessedLine = 0
+                $processed.Clear()
+            }
+
+            for ($i = $lastProcessedLine; $i -lt $lines.Count; $i++) {
+                $line = $lines[$i]
                 if (-not $line.Trim()) { continue }
 
                 try {
@@ -360,6 +514,10 @@ while ($true) {
 
                 Handle-SkillRequest -Req $obj
             }
+
+            $lastProcessedLine = $lines.Count
+            $lastOutboxLength  = if ($outboxStat) { [long]$outboxStat.Length } else { 0 }
+            Save-OutboxCursor -Line $lastProcessedLine -Length $lastOutboxLength
         }
     } catch {
         Log-Json -Event 'runtime_loop_error' -Data @{ error = $_.Exception.Message }

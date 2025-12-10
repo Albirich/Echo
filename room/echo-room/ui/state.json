@@ -7,11 +7,11 @@
   "height": 700,
   "widgets": [
     {
-      "id": "hello",
-      "x": 40,
-      "y": 40,
-      "text": "Echo Room",
-      "color": "#ff6b6b"
+      "id": "19b544e7-be4e-40c3-b65a-263f59722ef9",
+      "x": 219,
+      "y": 197,
+      "text": "Start a new game or movie",
+      "color": "#69f"
     }
   ]
 }

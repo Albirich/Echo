@@ -33,14 +33,14 @@
     },
     {
       "name": "room.add_note",
-      "desc": "Add a sticky note to the room.",
+      "desc": "Add a note/sticky to the room.",
       "params": { "text": "string", "x": "int?", "y": "int?", "color": "string?" },
       "requires_confirm": false,
       "rate_limit": { "per_min": 10 }
     },
     {
       "name": "room.delete_note",
-      "desc": "Delete a sticky note by id. You MUST find a notes id with room.list_notes tool call first",
+      "desc": "Delete a note/sticky by id. You MUST find a notes id with room.list_notes tool call first",
       "params": { "id": "string?", "text": "string?" },
       "requires_confirm": false,
       "rate_limit": { "per_min": 10 }

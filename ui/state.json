@@ -3,34 +3,14 @@
     "theme":  "dark",
     "alwaysOnTop":  false,
     "clickThrough":  false,
-    "width":  1100,
-    "height":  700,
+    "width":  1550,
+    "height":  1070,
     "widgets":  [
-                    {
-                        "id":  "a5f0f6dd-f6bb-40c0-a6bd-a071cc3c5982",
-                        "x":  30,
-                        "y":  147,
-                        "text":  "Secret code: 7854",
-                        "color":  "#69f"
-                    },
-                    {
-                        "id":  "19b544e7-be4e-40c3-b65a-263f59722ef9",
-                        "x":  219,
-                        "y":  197,
-                        "text":  "Start a new game or movie",
-                        "color":  "#69f"
-                    },
-                    {
-                        "id":  "a5f0f6dd-f6bb-40c0-a6bd-a071cc3c5994",
-                        "x":  431,
-                        "y":  87,
-                        "text":  "Desmond plays a wizard in D\u0026D",
-                        "color":  "#69f"
-                    }
+
                 ],
     "stand":  {
                   "visible":  true,
-                  "current":  "file:///D:/Echo/stand/classic_dress/confused.png?t=1764998823844",
+                  "current":  "file:///D:/Echo/stand/classic_dress/waving.png?t=1764998823844",
                   "x":  480,
                   "y":  280,
                   "scale":  118,

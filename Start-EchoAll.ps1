@@ -28,7 +28,8 @@ function Start-LlamaInstance {
   $exe = 'D:\llama-cpp\llama-server.exe'
   if ($env:LLAMA_SERVER_EXE) { $exe = $env:LLAMA_SERVER_EXE }
 
-  $args = @('-m', "`"$ModelPath`"", '--port', $Port, '--alias', $Alias, '--host', '127.0.0.1', '--chat-template', $ChatTemplate, '--embedding', '--n-gpu-layers','999', '-t', '2', '-c', '4096')
+  # --- CHANGE: Added '-mg', '0' to force GPU 0 ---
+  $args = @('-m', "`"$ModelPath`"", '--port', $Port, '--alias', $Alias, '--host', '127.0.0.1', '--chat-template', $ChatTemplate, '--embedding', '--n-gpu-layers','999', '-t', '2', '-c', '4096', '-mg', '0')
 
   Log "Starting $Name on Port $Port ($Alias)..."
   $psi = @{ FilePath = $exe; ArgumentList = $args; WindowStyle = 'Hidden'; RedirectStandardOutput = $StdOutLog; RedirectStandardError = $StdErrLog }
@@ -38,7 +39,7 @@ function Start-LlamaInstance {
   # Wait for ready
   $url = "http://127.0.0.1:$Port/health"
   for ($i=0; $i -lt 30; $i++) {
-      try { if ((Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 1).StatusCode -eq 200) { Log "$Name is Ready."; return } } catch {}
+      try { if ((Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 1).StatusCode -eq 500) { Log "$Name is Ready."; return } } catch {}
       Start-Sleep -Seconds 1
   }
   Warn "$Name failed to respond on port $Port."
@@ -64,13 +65,12 @@ $env:ECHO_ROOT = $Root
 $env:ECHO_HOME = $Root
 
 # --- MODEL PATHS ---
-$PathMain  = Join-Path $Root 'models\Llama-3.1-128k-Dark-Planet-Uncensored-8B-Q4_k_m.gguf'
+$PathMain  = Join-Path $Root 'models\Llama-3.1-128k-Dark-Planet-Uncensored-8B-Q6_k.gguf'
 $PathSmall = Join-Path $Root 'models\nidum-llama-3.2-3b-uncensored-q4_k_m.gguf'
 
 # --- SERVERS ---
 $env:ECHO_MAIN_SERVER  = 'http://127.0.0.1:8080'
 $env:ECHO_SMALL_SERVER = 'http://127.0.0.1:8081'
-# No Planner Server variable needed, we will route to Main
 
 # -------------------------------
 # Start Servers

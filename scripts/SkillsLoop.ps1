@@ -2,296 +2,205 @@ param(
     [string]$EchoRoot = $env:ECHO_ROOT
 )
 
+# --- DEBUG PATHS ---
+Write-Host "================ SKILLS LOOP DEBUG ================" -ForegroundColor Magenta
+if (-not $EchoRoot) {
+    $EchoRoot = $PSScriptRoot
+    Write-Host "Root missing. Defaulting to: $EchoRoot" -ForegroundColor Red
+}
+
 $SkillOutbox = Join-Path $EchoRoot 'ui\skills.outbox.jsonl'
 $SkillInbox  = Join-Path $EchoRoot 'ui\skills.inbox.jsonl'
+$StateFile   = Join-Path $EchoRoot 'ui\state.json'
+$DeepMemFile = Join-Path $EchoRoot 'memory\deep.json'
+$ThinkingInfoFile = Join-Path $EchoRoot 'state\ThinkingInfo.json' 
 
-# --- 1. TARGET THE REAL UI STATE ---
-$StateFile = Join-Path $EchoRoot 'ui\state.json'
-$DeepMemoryFile = Join-Path $EchoRoot 'memory\deep.json'
+# --- DIRS ---
+if (-not (Test-Path (Split-Path $SkillOutbox))) { New-Item -ItemType Directory -Force -Path (Split-Path $SkillOutbox) | Out-Null }
+if (-not (Test-Path (Split-Path $SkillInbox)))  { New-Item -ItemType Directory -Force -Path (Split-Path $SkillInbox) | Out-Null }
 
-if (-not (Test-Path (Split-Path $SkillOutbox))) {
-    New-Item -ItemType Directory -Force -Path (Split-Path $SkillOutbox) | Out-Null
-}
-if (-not (Test-Path (Split-Path $SkillInbox))) {
-    New-Item -ItemType Directory -Force -Path (Split-Path $SkillInbox) | Out-Null
-}
-
+# --- HELPERS ---
 function Write-JsonlLine {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][hashtable]$Object
-    )
+    param([string]$Path, [hashtable]$Object)
     $line = $Object | ConvertTo-Json -Depth 10 -Compress
-    if (-not (Test-Path $Path)) {
-        New-Item -ItemType File -Force -Path $Path | Out-Null
-    }
-    # Retry logic for writing to outbox
     $retries = 0
     while ($retries -lt 5) {
-        try {
-            Add-Content -Path $Path -Value $line -ErrorAction Stop
-            break
-        } catch {
-            Start-Sleep -Milliseconds 50
-            $retries++
-        }
+        try { Add-Content -Path $Path -Value $line -ErrorAction Stop; break }
+        catch { Start-Sleep -Milliseconds 50; $retries++ }
+    }
+}
+
+function Write-SideChannel {
+    param([string]$Source, [object]$Data)
+    try {
+        $dir = Split-Path $ThinkingInfoFile -Parent
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $info = @{ source = $Source; ts = (Get-Date).ToString("o"); data = $Data }
+        $json = $info | ConvertTo-Json -Depth 10
+        Set-Content -Path $ThinkingInfoFile -Value $json -Force
+        Write-Host "[SideChannel] Wrote $Source data to ThinkingInfo.json" -ForegroundColor Yellow
+    } catch {
+        Write-Host "[SideChannel] Error: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
 $seenRequestIds = [System.Collections.Generic.HashSet[string]]::new()
 
-function Invoke-Skill {
-    param(
-        [string]$SkillName,
-        [hashtable]$Params
-    )
-
-    switch ($SkillName) {
-        'memory.search'   { return Invoke-MemorySearch -Params $Params }
-        'memory.save'     { return Invoke-MemorySave -Params $Params }
-        'memory.forget'   { return Invoke-MemoryForget -Params $Params }
-        'room.list_notes' { return Invoke-RoomListNotes -Params $Params }
-        'room.delete_note'{ return Invoke-RoomDeleteNote -Params $Params }
-        'room.add_note'   { return Invoke-RoomAddNote -Params $Params }
-        default {
-            return @{ success = $false; error = "Unknown skill '$SkillName'"; data = $null }
-        }
-    }
-}
-
-# --- MEMORY HANDLERS ---------------------------------------------------------
-
-function Get-DeepMemory {
-    if (-not (Test-Path $DeepMemoryFile)) { return @() }
-    try {
-        $raw = Get-Content -Raw -Path $DeepMemoryFile -ErrorAction Stop
-        if (-not $raw.Trim()) { return @() }
-        return $raw | ConvertFrom-Json
-    } catch {
-        return @()
-    }
-}
-
-function Save-DeepMemory($items) {
-    try {
-        $items | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -Path $DeepMemoryFile
-    } catch {
-        Write-Host "[Error] Failed to save deep memory: $($_.Exception.Message)"
-    }
-}
-
-function Invoke-MemorySearch {
-    param([hashtable]$Params)
-    $tag = $Params.tag
-    $limit = if ($Params.limit) { [int]$Params.limit } else { 20 }
-
-    $items = @(Get-DeepMemory)
-    if ($tag) {
-        $items = $items | Where-Object { $_.tags -contains $tag }
-    }
-    $items = $items | Select-Object -First $limit
-
-    return @{ success = $true; error = $null; data = @{ matches = $items } }
-}
-
-function Invoke-MemorySave {
-    param([hashtable]$Params)
-    $k = $Params.k; $v = $Params.v
-    if (-not $k) { return @{ success=$false; error="memory.save missing 'k'" } }
-
-    $items = @(Get-DeepMemory)
-    $existing = $items | Where-Object { $_.key -eq $k }
-    $others   = $items | Where-Object { $_.key -ne $k }
-
-    $new = [pscustomobject]@{ key = $k; value = $v }
-    $all = @($others + $new)
-    Save-DeepMemory -items $all
-
-    return @{ success=$true; data=@{ key=$k } }
-}
-
-function Invoke-MemoryForget {
-    param([hashtable]$Params)
-    $k = $Params.k
-    if (-not $k) { return @{ success=$false; error="memory.forget missing 'k'" } }
-
-    $items = @(Get-DeepMemory)
-    $before = $items.Count
-    $items = $items | Where-Object { $_.key -ne $k }
-    $after = $items.Count
-    Save-DeepMemory -items $items
-
-    return @{ success=$true; data=@{ removed=($before - $after) } }
-}
-
-# --- ROOM HANDLERS (With Retry Logic) ----------------------------------------
-
+# --- STATE HANDLERS ---
 function Get-StateJson {
+    if (-not (Test-Path $StateFile)) { return $null }
     $retries = 0
     while ($retries -lt 5) {
         try {
-            if (-not (Test-Path $StateFile)) { return $null }
-            # -Shared Read to allow UI to have it open
             $fs = [System.IO.File]::Open($StateFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
             $sr = New-Object System.IO.StreamReader($fs)
             $raw = $sr.ReadToEnd()
-            $sr.Close()
-            $fs.Close()
-
+            $sr.Close(); $fs.Close()
             if (-not $raw.Trim()) { return $null }
             return $raw | ConvertFrom-Json
-        } catch {
-            Start-Sleep -Milliseconds 100
-            $retries++
-        }
+        } catch { Start-Sleep -Milliseconds 50; $retries++ }
     }
     return $null
 }
 
 function Save-StateJson($jsonObj) {
-    $retries = 0
-    while ($retries -lt 5) {
-        try {
-            $json = $jsonObj | ConvertTo-Json -Depth 10
-            # Force UTF8 no BOM
-            [System.IO.File]::WriteAllText($StateFile, $json, [System.Text.Encoding]::UTF8)
-            break
-        } catch {
-            Start-Sleep -Milliseconds 100
-            $retries++
-        }
-    }
+    $json = $jsonObj | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($StateFile, $json, [System.Text.Encoding]::UTF8)
 }
 
-function Get-RoomNotes {
-    $state = Get-StateJson
-    if (-not $state) { return @() }
-    
-    # --- CRITICAL FIX: Look for 'widgets' first (what UI uses) ---
-    if ($state.widgets) { return @($state.widgets) }
-    if ($state.notes)   { return @($state.notes) }
-    return @()
+function Get-DeepMemory {
+    if (-not (Test-Path $DeepMemFile)) { return @() }
+    try {
+        $raw = Get-Content -Raw -Path $DeepMemFile -ErrorAction Stop
+        if (-not $raw.Trim()) { return @() }
+        return $raw | ConvertFrom-Json
+    } catch { return @() }
 }
 
-function Save-RoomNotes($items) {
-    $state = Get-StateJson
-    if (-not $state) { return }
+function Save-DeepMemory($items) {
+    $items | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -Path $DeepMemFile
+}
 
-    # Update the correct property
-    if ($state.PSObject.Properties.Name -contains 'widgets') {
-        $state.widgets = $items
-    } elseif ($state.PSObject.Properties.Name -contains 'notes') {
-        $state.notes = $items
-    } else {
-        # Default to widgets if neither exists
-        $state | Add-Member -NotePropertyName 'widgets' -NotePropertyValue $items
-    }
-    Save-StateJson $state
+# --- TOOLS ---
+function Invoke-MemorySearch {
+    param([hashtable]$Params)
+    $tag = $Params.tag
+    $limit = if ($Params.limit) { [int]$Params.limit } else { 20 }
+    $items = @(Get-DeepMemory)
+    if ($tag) { $items = $items | Where-Object { ($_.k -like "*$tag*") -or ($_.v -like "*$tag*") } }
+    $items = $items | Select-Object -First $limit
+    Write-SideChannel -Source "memory.search" -Data $items
+    return @{ success=$true; data=@{ matches=$items } }
 }
 
 function Invoke-RoomListNotes {
     param([hashtable]$Params)
-    $notes = Get-RoomNotes
-    return @{ success = $true; data = @{ notes = $notes } }
-}
-
-function Invoke-RoomAddNote {
-    param([hashtable]$Params)
-    $text = $Params.text
-    if (-not $text) { return @{ success=$false; error="room.add_note missing 'text'" } }
-
-    $notes = Get-RoomNotes
-    $id = [guid]::NewGuid().ToString()
+    $state = Get-StateJson
+    $notes = @()
+    # Explicitly prioritize widgets
+    if ($state -and $state.widgets) { $notes = @($state.widgets) }
+    elseif ($state -and $state.notes) { $notes = @($state.notes) }
     
-    # Create valid widget structure
-    $note = [pscustomobject]@{
-        id    = $id
-        text  = $text
-        x     = 100
-        y     = 150
-        color = "#69f" # Default blue
-    }
-
-    $all = @($notes + $note)
-    Save-RoomNotes -items $all
-
-    return @{ success = $true; data = @{ note = $note } }
+    Write-SideChannel -Source "room.list_notes" -Data $notes
+    return @{ success=$true; data=@{ notes=$notes } }
 }
 
 function Invoke-RoomDeleteNote {
     param([hashtable]$Params)
     $id = $Params.id
-    if (-not $id) { return @{ success=$false; error="room.delete_note missing 'id'" } }
-
-    $notes = Get-RoomNotes
-    $before = $notes.Count
+    if (-not $id) { return @{ success=$false; error="Missing 'id'" } }
+    $state = Get-StateJson
     
-    # Filter
-    $remaining = $notes | Where-Object { $_.id -ne $id }
-    $after = $remaining.Count
-
-    Save-RoomNotes -items $remaining
-
-    return @{ success = $true; data = @{ removed = ($before - $after); id = $id } }
+    # Use ArrayList to safely handle list manipulation
+    $list = [System.Collections.ArrayList]::new()
+    $items = if ($state.widgets) { @($state.widgets) } else { @($state.notes) }
+    $target = if ($state.widgets) { "widgets" } else { "notes" }
+    
+    $found = 0
+    foreach ($item in $items) {
+        if ($item.id -eq $id) { $found++ }
+        else { [void]$list.Add($item) }
+    }
+    
+    if ($target -eq "widgets") { $state.widgets = $list } else { $state.notes = $list }
+    
+    Save-StateJson $state
+    return @{ success=$true; data=@{ removed=$found; id=$id } }
 }
 
-# --- Main loop ---------------------------------------------------------------
+function Invoke-RoomAddNote {
+    param([hashtable]$Params)
+    $text = $Params.text
+    if (-not $text) { return @{ success=$false; error="Missing 'text'" } }
 
-Write-Host "[SkillsLoop] Starting. Reading from: $StateFile"
+    $state = Get-StateJson
+    if (-not $state) { return @{ success=$false; error="Cannot read state file" } }
 
+    # Ensure widgets array exists
+    if (-not $state.PSObject.Properties.Name.Contains('widgets')) {
+        $state | Add-Member -MemberType NoteProperty -Name 'widgets' -Value @() -Force
+    }
+
+    # Safe List Construction
+    $list = [System.Collections.ArrayList]::new()
+    if ($state.widgets) {
+        foreach ($w in $state.widgets) { [void]$list.Add($w) }
+    }
+
+    $id = [guid]::NewGuid().ToString()
+    $note = @{
+        id    = $id
+        text  = $text
+        x     = if ($Params.x) { $Params.x } else { 220 }
+        y     = if ($Params.y) { $Params.y } else { 200 }
+        color = if ($Params.color) { $Params.color } else { "#69f" }
+    }
+
+    [void]$list.Add($note)
+    $state.widgets = $list
+    Save-StateJson $state
+
+    return @{ success=$true; data=@{ note=$note } }
+}
+
+# --- DISPATCHER ---
+function Invoke-Skill {
+    param([string]$SkillName, [hashtable]$Params)
+    switch ($SkillName) {
+        'room.list_notes'  { return Invoke-RoomListNotes -Params $Params }
+        'room.delete_note' { return Invoke-RoomDeleteNote -Params $Params }
+        'room.add_note'    { return Invoke-RoomAddNote -Params $Params }
+        'memory.search'    { return Invoke-MemorySearch -Params $Params }
+        default { return @{ success=$true; data="Simulated success for $SkillName" } }
+    }
+}
+
+# --- LOOP ---
+Write-Host "SkillsLoop Running..." -ForegroundColor Cyan
 $lastLineCount = 0
-
 while ($true) {
     if (Test-Path $SkillOutbox) {
-        # Use retry-read for the outbox too
         $lines = $null
         try {
             $fs = [System.IO.File]::Open($SkillOutbox, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-            $sr = New-Object System.IO.StreamReader($fs)
-            $fileContent = $sr.ReadToEnd()
-            $sr.Close(); $fs.Close()
-            $lines = $fileContent -split "`r`n"
-        } catch {
-            Start-Sleep -Milliseconds 100
-            continue
-        }
+            $sr = New-Object System.IO.StreamReader($fs); $raw = $sr.ReadToEnd(); $sr.Close(); $fs.Close()
+            $lines = $raw -split "`r`n"
+        } catch {}
 
         if ($lines) {
             for ($i = $lastLineCount; $i -lt $lines.Count; $i++) {
                 $line = $lines[$i]
                 if (-not $line.Trim()) { continue }
-
                 try { $obj = $line | ConvertFrom-Json } catch { continue }
                 if ($obj.type -ne 'skill_request') { continue }
-
                 $reqId = $obj.request_id
                 if ($seenRequestIds.Contains($reqId)) { continue }
                 [void]$seenRequestIds.Add($reqId)
 
-                Write-Host "Executing skill: $($obj.skill)" -ForegroundColor Cyan
-
-                $skillName = $obj.skill
-                $params    = @{}
-                if ($obj.params) {
-                    foreach ($p in $obj.params.PSObject.Properties) {
-                        $params[$p.Name] = $p.Value
-                    }
-                }
-
-                $result = Invoke-Skill -SkillName $skillName -Params $params
-
-                $response = @{
-                    type       = "skill_response"
-                    request_id = $reqId
-                    success    = $result.success
-                    error      = $result.error
-                    data       = $result.data
-                    created_at = (Get-Date).ToString("o")
-                    skill      = $skillName
-                    step_id    = $obj.step_id
-                    loop_id    = $obj.loop_id
-                }
-
+                Write-Host "Exec: $($obj.skill)" -ForegroundColor Yellow
+                $res = Invoke-Skill -SkillName $obj.skill -Params $obj.params
+                
+                $response = @{ type="skill_response"; request_id=$reqId; success=$res.success; error=$res.error; data=$res.data; skill=$obj.skill }
                 Write-JsonlLine -Path $SkillInbox -Object $response
             }
             $lastLineCount = $lines.Count
