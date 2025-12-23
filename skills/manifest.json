@@ -1,0 +1,71 @@
+{
+  "version": "1",
+  "tools": [
+    {
+      "name": "memory.save",
+      "desc": "Save or update a durable fact.",
+      "params": { "k": "string", "v": "string" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 12 }
+    },
+    {
+      "name": "memory.forget",
+      "desc": "Forget a durable fact.",
+      "params": { "k": "string" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 12 }
+    },
+    {
+      "name": "memory.search",
+      "desc": "Search deep memory by tag. this will NOT find id's or info on notes or other information about features. memory is strictly facts you learned about the world.",
+      "params": { "tag": "string", "limit": "int?" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 20 }
+    },
+    {
+      "name": "room.set_background",
+      "desc": "Set wallpaper image (copied into decor/).",
+      "params": { "src": "string" },
+      "requires_confirm": true,
+      "ext_whitelist": [ ".jpg", ".jpeg", ".png", ".webp" ],
+      "max_mb": 20,
+      "rate_limit": { "per_min": 2 }
+    },
+    {
+      "name": "room.add_note",
+      "desc": "Add a note/sticky to the room. Text is what is shown on the screen so make sure its what you want user to see. X and Y are coordinates on your room screen. Colors string should be in hexcode.",
+      "params": { "text": "string", "x": "int?", "y": "int?", "color": "string?" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 10 }
+    },
+    {
+      "name": "room.delete_note",
+      "desc": "Delete a note/sticky by id. You MUST find a notes id with room.list_notes tool call first",
+      "params": { "id": "string?", "text": "string?" },
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 10 }
+    },
+    {
+      "name": "room.list_notes",
+      "desc": "List notes/stickies currently in the room. Used to get the information about all the notes; including id, text, and location.",
+      "params": {},
+      "requires_confirm": false,
+      "rate_limit": { "per_min": 30 }
+    },
+    {
+      "name": "discord.send",
+      "desc": "Send a message to Discord. Use this to initiate a conversation or reply to a specific channel/person.",
+      "params": {
+        "text": "The message content.",
+        "target_id": "(Optional) The Channel ID or User ID to message. Defaults to last active."
+      }
+    },
+    {
+      "name": "social.lookup_user",
+      "desc": "Search for a user's profile by name or nickname to get their ID for messaging.",
+      "params": {
+        "name": "The name or nickname to search for (e.g. 'Desmond', 'ShadowRunner')."
+      }
+    }
+  ]
+}

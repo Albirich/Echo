@@ -1,0 +1,44 @@
+{
+    "182260951653810176":  {
+                               "id":  "182260951653810176",
+                               "name":  "Omega",
+                               "first_seen":  "2025-12-20T10:39:43.2419322-05:00",
+                               "affinity":  2.7755575615628914E-17,
+                               "nicknames":  [
+
+                                             ],
+                               "summary":  "User \u0027Omega\u0027 has also shared their lighthearted tone outside of Magic: The Gathering, indicating a playful and adaptable personality."
+                           },
+    "296477302320005120":  {
+                               "id":  "296477302320005120",
+                               "name":  "Albirich",
+                               "nicknames":  [
+                                                 "N/A",
+                                                 "Desmond",
+                                                 "Albirich"
+                                             ],
+                               "affinity":  1,
+                               "summary":  "Albirich continues to demonstrate their technical proficiency by successfully implementing the new system.",
+                               "first_seen":  "2025-12-13T03:35:48.927258"
+                           },
+    "1032415445917126736":  {
+                                "id":  "1032415445917126736",
+                                "name":  "Ares",
+                                "first_seen":  "2025-12-18T10:45:38.2333156-05:00",
+                                "affinity":  0.79999999999999993,
+                                "nicknames":  [
+                                                  "Commander"
+                                              ],
+                                "summary":  "Ares\u0027s perception of \u0027edgy\u0027 by the AI suggests they have a dry sense of humor and don\u0027t take things too seriously, hinting at a laid-back, non-conformist personality."
+                            },
+    "658893449164095508":  {
+                               "id":  "658893449164095508",
+                               "name":  "Degenerate Dan",
+                               "first_seen":  "2025-12-20T15:07:23.9699058-05:00",
+                               "affinity":  0.5,
+                               "nicknames":  [
+
+                                             ],
+                               "summary":  "Degenerate Dan is quite playful and curious, asking about favorites."
+                           }
+}

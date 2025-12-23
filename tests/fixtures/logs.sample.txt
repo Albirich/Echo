@@ -1,0 +1,4 @@
+[tick #041] thread=t-upgrade-clarify choice=PublicUtterance U=0.63 speak_left=0/90s tool_left=3/60s why="Ask to clarify upgrade" result=ok note="sent"
+[tick #042] thread=t-upgrade-clarify choice=ToolCall U=0.58 speak_left=0/90s tool_left=2/60s why="Investigate via view_screen" result=denied note="consent_block; rewrote"
+[tick #042] thread=t-upgrade-clarify choice=PublicUtterance U=0.56 speak_left=0/90s tool_left=2/60s why="Ask for screen permission" result=ok note="sent"
+[tick #043] thread=t-upgrade-clarify choice=MemoryWrite U=0.40 speak_left=0/90s tool_left=2/60s why="Diary update" result=ok note="appended"

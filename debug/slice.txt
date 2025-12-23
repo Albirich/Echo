@@ -1,0 +1,6 @@
+ (PowerShell 5.1)
+  - PERFORMANCE IMPROVEMENTS:
+    * Reduced context size (512 -> 256)
+    * Reduced prediction tokens (120 -> 60)
+    * Increased GPU layers if available
+    * Lowered skip threshold

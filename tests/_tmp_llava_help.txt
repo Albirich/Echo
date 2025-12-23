@@ -1,0 +1,5 @@
+
+WARNING: The binary 'llama-llava-cli.exe' is deprecated.
+Please use 'llama-mtmd-cli' instead.
+
+

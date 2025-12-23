@@ -1,0 +1,14 @@
+{
+    "tasteDNA":  {
+                     "seed":  18041997,
+                     "temp":  0.10,
+                     "plasticity":  0.04,
+                     "latent_vec_dim":  24
+                 },
+    "items":  {
+
+              },
+    "assoc":  {
+
+              }
+}

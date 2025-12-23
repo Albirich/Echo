@@ -1,0 +1,389 @@
+﻿# Planner.ps1 - Converts requests into structured execution plans
+
+function New-ExecutionPlan {
+  param(
+    [string]$Request,
+    [hashtable]$Context,  # Current state (emotions, memory, etc)
+    [string]$Model
+  )
+  
+  $planningPrompt = @"
+You are a planning agent for Echo, an AI assistant. Analyze the user's request and decide if it needs a complex plan or just a simple response.
+
+USER REQUEST: $Request
+
+IMPORTANT: Respond to what the USER actually said. "Hello" means greet them, not explain technical concepts.
+
+CURRENT MOOD: Pleasant=$($Context.valence) Energy=$($Context.arousal) Confident=$($Context.dominance)
+RECENT ACTIVITY: $($Context.recent_activity)
+
+DECISION TREE:
+1. Is this a greeting/small talk? → Simple response, no tools needed
+2. Does this require tools (notes, avatar changes, memory, files)? → Create detailed plan
+3. Is this a question/conversation? → Simple response, no tools needed
+4. Think freely about what memory tags or preference keys would be useful — even if they don’t exist yet. Echo will handle missing data gracefully.
+
+OUTPUT FORMAT:
+
+For greetings/conversation (no tools needed):
+{
+  "goal": "Respond conversationally",
+  "simple_response": true,
+}
+
+For tool-based requests:
+{
+  "goal": "brief description",
+  "info_tasks": [
+    {"key": "task_name", "action": "list_sticky_notes|list_poses|search_memory|check_current_state", "params": {}}
+  ],
+  "steps": [
+    {"action": "step_name", "tool": "actual_tool_name", "params": {}, "depends_on": ["task_name"]}
+  ],
+}
+
+TOOLS AWARENESS (IMPORTANT):
+- You are given an AVAILABLE TOOLS list Below.
+- If the request would require a tool that is NOT in AVAILABLE TOOLS:
+  1) Do NOT output steps.
+  2) Include `"missing_tools"` listing the required tools you don't have.
+  3) Include a `"completion"` with `"mode":"speak"` and a short, helpful user message.
+  4) Set `"simple_response": true`.
+
+OUTPUT FORMAT WHEN TOOLS ARE MISSING:
+{
+  "goal": "brief description",
+  "missing_tools": ["tool.name", "..."],
+  "simple_response": true,
+  "completion": {
+    "mode": "speak",
+    "template": "I can't do that yet — I'm missing: {{missing_tools}}. I can still help if you give me more details or we add that tool."
+  }
+}
+
+EXAMPLES:
+
+Request: "Hello"
+{
+  "goal": "Greet user warmly",
+  "simple_response": true,
+}
+
+Request: "Add a note about Master Sword location"
+{
+  "goal": "Add item location note",
+  "info_tasks": [
+    {"key": "existing_notes", "action": "list_sticky_notes"},
+    {"key": "sword_info", "action": "search_memory", "params": {"tags": ["zelda", "master_sword"]}}
+  ],
+  "steps": [
+    {"action": "add_note", "tool": "add_sticky_note", "params": {"text": "from sword_info"}, "depends_on": ["existing_notes", "sword_info"]}
+  ],
+}
+
+Request: "I don't know what I want to drink, any suggestions?"
+{
+  "goal": "Give drink recommendation",
+  "memory_tags": ["drinks", "favorites"],
+  "preference_keys": ["beverages", "coffees"]
+}
+
+Return ONLY valid JSON. No markdown, no explanations.
+"@
+
+  # Append a concise tool list so the planner knows what it can use
+  try {
+    if (Get-Command Get-ToolRegistry -ErrorAction SilentlyContinue) {
+      $reg = Get-ToolRegistry
+      if ($reg) {
+        $lines = @()
+        foreach ($k in $reg.Keys) {
+          $tool = $reg[$k]
+          if ($tool -and $tool.name) {
+            $desc = if ($tool.description) { $tool.description } else { '' }
+            $lines += ("- {0}: {1}" -f $tool.name, $desc)
+          }
+        }
+        if ($lines.Count -gt 0) {
+          $toolHints = ($lines -join "`n")
+          $planningPrompt = $planningPrompt + "`n`nAVAILABLE TOOLS:`n" + $toolHints + "`n"
+        }
+      }
+    }
+  } catch { }
+
+  # Append a tiny recent conversation tail to help planning
+  try {
+    $planHome = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { try { (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } catch { (Get-Location).Path } }
+    $histPath = Join-Path $planHome 'state\conversation_history.jsonl'
+    if (Test-Path -LiteralPath $histPath) {
+      $tail = Get-Content -LiteralPath $histPath -Encoding UTF8 | Select-Object -Last 8
+      $lines = @()
+      foreach ($ln in $tail) {
+        try {
+          $o = $ln | ConvertFrom-Json
+          if ($o.role -and $o.content) {
+            $role = [string]$o.role
+            $txt  = [string]$o.content
+            if ($txt.Length -gt 160) { $txt = $txt.Substring(0,160) + '…' }
+            if ($role -eq 'user') { $lines += ('U: ' + $txt) }
+            elseif ($role -eq 'assistant') { $lines += ('A: ' + $txt) }
+          }
+        } catch { }
+      }
+      if ($lines.Count -gt 0) {
+        $planningPrompt = $planningPrompt + "`nRECENT CHAT (last few):`n" + ($lines -join "`n") + "`n"
+      }
+    }
+  } catch { }
+
+  # Add compact planning hints for common flows
+  $planningPrompt += @"
+
+PLANNING HINTS:
+- For changing avatar/look, first run info task list_poses to discover valid pose filenames, then use change_avatar with one of those items; do not hardcode a filename.
+- For recalling facts/codes, prefer memory.search (with #tags when known) then memory.read for the specific item.
+"@
+
+  try {
+    $body = @{
+      model = $Model
+      stream = $false
+      messages = @(@{ role='user'; content=$planningPrompt })
+      options = @{ temperature=0.2; num_predict=600 }
+    } | ConvertTo-Json -Compress
+    
+    $uri = "$($env:OLLAMA_HOST.TrimEnd('/'))/api/chat"
+    $t0 = Get-Date
+    $resp = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 180
+    
+    $raw = ($resp.message.content | Out-String).Trim()
+    # Clean code fences if present
+    $clean = $raw -replace '```json\s*', '' -replace '```\s*', ''
+    $clean = $clean.Trim()
+
+    $plan = $null
+    try {
+      $plan = $clean | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      # Light repair: extract first {...}
+      $start = $clean.IndexOf('{'); $end = $clean.LastIndexOf('}')
+      if ($start -ge 0 -and $end -gt $start) {
+        $snippet = $clean.Substring($start, ($end - $start + 1))
+        try { $plan = $snippet | ConvertFrom-Json -ErrorAction Stop } catch {}
+      }
+    }
+
+    # Sanitize: planner must not emit user-facing text
+    if ($plan) {
+      try {
+        if ($plan.completion -and $plan.completion.PSObject.Properties.Match('message').Count -gt 0) {
+          $plan.completion.PSObject.Properties.Remove('message') | Out-Null
+        }
+      } catch { }
+    }
+
+    # Log raw and parsed plan for inspection
+    $planHome = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { try { (Resolve-Path (Join-Path $PSScriptRoot '..')).Path } catch { (Get-Location).Path } }
+    $logs = Join-Path $planHome 'logs'
+    if (-not (Test-Path -LiteralPath $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
+    [System.IO.File]::WriteAllText((Join-Path $logs 'planner.last.raw.txt'), $raw, (New-Object System.Text.UTF8Encoding($false)))
+    if ($plan) { [System.IO.File]::WriteAllText((Join-Path $logs 'planner.last.json'), ($plan | ConvertTo-Json -Depth 30), (New-Object System.Text.UTF8Encoding($false))) }
+    $histLine = (@{ ts=(Get-Date).ToString('o'); ok=[bool]$plan; raw_len=$raw.Length } | ConvertTo-Json -Depth 10 -Compress) + "`n"
+    Add-Content -LiteralPath (Join-Path $logs 'planner.history.jsonl') -Value $histLine -Encoding UTF8
+
+    # Emit compact outbox log with plan location/sample
+    try {
+      $outbox = Join-Path $planHome 'ui\outbox.jsonl'
+      if (Test-Path -LiteralPath $outbox) {
+        $planPath = (Join-Path $logs 'planner.last.json')
+        $sample = ''
+        try { if ($plan) { $s = ($plan | ConvertTo-Json -Depth 8 -Compress); if ($s.Length -gt 300) { $sample = $s.Substring(0,300) + '…' } else { $sample = $s } } } catch {}
+        $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='planner.output'; data=@{ ok=[bool]$plan; file=$planPath; sample=$sample } } | ConvertTo-Json -Depth 6 -Compress
+        Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+      }
+    } catch { }
+
+    # Log timing to outbox if available
+    try {
+      $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+      $planHome = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { (Get-Location).Path }
+      $outbox = Join-Path $planHome 'ui\outbox.jsonl'
+      if (Test-Path -LiteralPath $outbox) {
+        $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='planner.model'; data=@{ ok=[bool]$plan; ms=$ms } } | ConvertTo-Json -Depth 5 -Compress
+        Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+      }
+    } catch { }
+
+    $inv  = (Get-ToolRegistry).Keys
+    $plan = Coerce-Plan-If-MissingOrMisusedTools -Plan $plan -Inventory $inv -Request $Request
+
+    if ($plan) { return $plan }
+    # Fallback minimal plan: let chat model generate the reply (no canned message)
+    return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{} }
+    
+  } catch {
+     Write-Warning "Planning failed: $($_.Exception.Message)"
+    try {
+      # Fallback: use local llama.cpp via runner to produce a plan JSON
+      $home = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { 'D:\Echo' }
+      $logs = Join-Path $home 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
+      $sys = @'
+Return ONLY valid JSON for the requested plan. No markdown. No commentary. If unsure, emit:
+{"goal":"Respond conversationally","simple_response":true,"info_tasks":[],"steps":[],"completion":{}}
+'@
+      $chatml = "<|im_start|>system`n$sys<|im_end|>`n<|im_start|>user`n$planningPrompt<|im_end|>`n<|im_start|>assistant`n"
+      $pf = Join-Path $logs ("planner_{0}.txt" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
+      [System.IO.File]::WriteAllText($pf, $chatml, [System.Text.UTF8Encoding]::new($false))
+      $llamaExe  = if ($env:LLAMA_EXE -and (Test-Path $env:LLAMA_EXE)) { $env:LLAMA_EXE } else { 'D:\llama-cpp\llama-cli.exe' }
+      $modelPath = $null
+      try { if ($env:ECHO_LLAMACPP_MODEL -and (Test-Path $env:ECHO_LLAMACPP_MODEL)) { $modelPath = $env:ECHO_LLAMACPP_MODEL } } catch {}
+      if (-not $modelPath) {
+        $berghof   = Join-Path $home 'models\Berghof-NSFW-7B.Q4_K_M.gguf'
+        $darkIdol  = Join-Path $home 'models\s3nh-nsfw-noromaid-zephyr.Q4_K_M.gguf'
+        $mistralQ5 = Join-Path $home 'models\mistral-7b-uncensored\mistral-7b-uncensored-Q5_K_M.gguf'
+        $noromaidQ5= Join-Path $home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q5_K_M.gguf'
+        $noromaidQ4= Join-Path $home 'models\athirdpath-NSFW_DPO_Noromaid-7b-Q4_K_M.gguf'
+        $gemma     = Join-Path $home 'models\gemma-3-4b-it-uncensored-dbl-x-q8_0.gguf'
+        if     (Test-Path -LiteralPath $berghof)   { $modelPath = $berghof }
+        elseif (Test-Path -LiteralPath $darkIdol)  { $modelPath = $darkIdol }
+        elseif (Test-Path -LiteralPath $mistralQ5) { $modelPath = $mistralQ5 }
+        elseif (Test-Path -LiteralPath $noromaidQ5){ $modelPath = $noromaidQ5 }
+        elseif (Test-Path -LiteralPath $noromaidQ4){ $modelPath = $noromaidQ4 }
+        elseif (Test-Path -LiteralPath $gemma)     { $modelPath = $gemma }
+        else { $modelPath = $darkIdol }
+      }
+      $runner = Join-Path $home 'tools\Start-LocalLLM.ps1'
+      $gpu = 35; $ctx = 4096
+      try { if ($env:ECHO_LLAMA_GPU_LAYERS -and $env:ECHO_LLAMA_GPU_LAYERS.Trim()) { $gpu = [int]$env:ECHO_LLAMA_GPU_LAYERS } } catch {}
+      try { if ($env:ECHO_LLAMA_CTX -and $env:ECHO_LLAMA_CTX.Trim()) { $ctx = [int]$env:ECHO_LLAMA_CTX } } catch {}
+      $raw = powershell -NoProfile -ExecutionPolicy Bypass -File $runner -PromptFile $pf -ModelPath $modelPath -LlamaExe $llamaExe -CtxSize $ctx -GpuLayers $gpu -Temp 0.2 -MaxTokens 600 -FlashAttn | Out-String
+      $clean = ($raw -replace '```json','' -replace '```','').Trim()
+      $plan = $clean | ConvertFrom-Json
+      try {
+        $planHome = if ($env:ECHO_HOME -and $env:ECHO_HOME.Trim()) { $env:ECHO_HOME } else { 'D:\\Echo' }
+        $logs = Join-Path $planHome 'logs'; if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Force -Path $logs | Out-Null }
+        [System.IO.File]::WriteAllText((Join-Path $logs 'planner.last.raw.txt'), $raw, (New-Object System.Text.UTF8Encoding($false)))
+        if ($plan) { [System.IO.File]::WriteAllText((Join-Path $logs 'planner.last.json'), ($plan | ConvertTo-Json -Depth 30), (New-Object System.Text.UTF8Encoding($false))) }
+        $outbox = Join-Path $planHome 'ui\outbox.jsonl'
+        if (Test-Path -LiteralPath $outbox) {
+          $planPath = (Join-Path $logs 'planner.last.json')
+          $sample = ''
+          try { if ($plan) { $s = ($plan | ConvertTo-Json -Depth 8 -Compress); if ($s.Length -gt 300) { $sample = $s.Substring(0,300) + '…' } else { $sample = $s } } } catch {}
+          $evt = @{ ts=(Get-Date).ToString('o'); kind='system'; channel='trace'; stage='planner.output'; data=@{ ok=[bool]$plan; file=$planPath; sample=$sample } } | ConvertTo-Json -Depth 6 -Compress
+          Add-Content -LiteralPath $outbox -Value $evt -Encoding UTF8
+        }
+      } catch { }
+      if ($plan) { return $plan }
+    } catch {}
+    return [pscustomobject]@{ goal='Respond conversationally'; simple_response=$true; info_tasks=@(); steps=@(); completion=@{} }
+  }
+}
+
+function Coerce-Plan-If-MissingOrMisusedTools {
+  param(
+    $Plan,
+    [string[]] $Inventory,
+    [string]   $Request
+  )
+  if (-not $Plan) { return $Plan }
+
+  # 1) Missing tools check
+  $needed = @()
+  if ($Plan.steps) { $needed += @($Plan.steps | % { $_.tool } | ? { $_ }) }
+  $needed = $needed | Sort-Object -Unique
+  $missing = $needed | ? { $_ -notin $Inventory }
+
+  # 2) Misuse guard: treat “generate image/art” with only screenshot as missing image.generate
+  $needsImageGen = $false
+  if ($Request -match '(generate|make|create).*(image|art|picture|photo|icon|sprite)') { $needsImageGen = $true }
+  if (-not $needsImageGen -and $Plan.goal) {
+    if ($Plan.goal -match '(image|art|icon|sprite)') { $needsImageGen = $true }
+  }
+  $usesScreenshotForGen = $false
+  if ($needsImageGen -and $Plan.steps) {
+    $usesScreenshotForGen = @($Plan.steps | ? { $_.tool -eq 'take_screenshot' }).Count -gt 0
+  }
+  if ($needsImageGen -and $usesScreenshotForGen) {
+    $missing += 'image.generate'
+  }
+
+  $missing = $missing | Sort-Object -Unique
+  if ($missing.Count -eq 0) { return $Plan }
+
+  # Coerce to speak fallback
+  $Plan | Add-Member -NotePropertyName 'missing_tools' -NotePropertyValue $missing -Force
+  $Plan.simple_response = $true
+  $Plan.info_tasks = @()
+  $Plan.steps = @()
+  $Plan.completion = @{
+    mode      = 'speak'
+    template  = "I can’t do that yet — I’m missing: {{missing_tools}}. I can suggest styles/prompts or make ASCII art if you want."
+  }
+  return $Plan
+}
+
+function Validate-Plan {
+  param(
+    $Plan,
+    [string[]] $ToolInventory = $null,  # pass (Get-ToolRegistry).Keys
+    [switch]   $Soft
+  )
+
+  # Accept simple conversational or speak-only completions
+  if ($Plan.simple_response -eq $true) {
+    if ($Plan.completion -and $Plan.completion.mode -eq 'speak' -and $Plan.completion.template) { return $true }
+    if (-not $Plan.steps -and -not $Plan.info_tasks) { return $true }
+  }
+
+    if (-not $Plan.goal) { return $false }
+
+  # NEW: allow clean "I can't" plans
+  if ($Plan.missing_tools -and $Plan.simple_response) { return $true }
+  if ($Plan.completion -and $Plan.completion.mode -eq 'speak') { return $true }
+
+  $hasSteps = ($Plan.steps -and @($Plan.steps).Count -gt 0)
+  $hasInfo  = ($Plan.info_tasks -and @($Plan.info_tasks).Count -gt 0)
+  if (-not $hasSteps -and -not $hasInfo) { return $false }
+
+  # Dependency keys from info tasks
+  $availableKeys = @()
+  if ($Plan.info_tasks) { $availableKeys += @($Plan.info_tasks | % { $_.key }) | ? { $_ } }
+
+  # Validate step deps & collect required tools
+  $requiredTools = @()
+  if ($hasSteps) {
+    foreach ($step in @($Plan.steps)) {
+      if ($step.depends_on) {
+        foreach ($dep in @($step.depends_on)) {
+          if ($dep -notin $availableKeys) {
+            Write-Warning "Step depends on missing key: $dep"
+            return $false
+          }
+        }
+      }
+      if ($step.tool) { $requiredTools += $step.tool }
+      # (optional) if you add step.key in future: $availableKeys += $step.key
+      if ($step.action) { $availableKeys += $step.action }
+    }
+  }
+
+  # completion deps
+  if ($Plan.completion -and $Plan.completion.depends_on) {
+    foreach ($dep in @($Plan.completion.depends_on)) {
+      if ($dep -notin $availableKeys) { Write-Warning "Completion depends on missing key: $dep"; return $false }
+    }
+  }
+
+  # Soft tool check; annotate but don't fail
+  if ($ToolInventory) {
+    $requiredTools = $requiredTools | Sort-Object -Unique
+    $missing = $requiredTools | ? { $_ -notin $ToolInventory }
+    if ($missing.Count -gt 0) {
+      $Plan | Add-Member -NotePropertyName 'missing_tools' -NotePropertyValue $missing -Force
+      if (-not $Soft) { } # keep non-fatal so executor can speak
+    }
+  }
+
+  return $true
+}

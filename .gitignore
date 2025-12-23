@@ -1,0 +1,41 @@
+Set-Content -Path "D:\Echo\.gitignore" -Value "# --- HEAVY AI MODELS ---
+models/
+*.bin
+*.gguf
+*.pt
+*.onnx
+*.safetensors
+*.pth
+*.ckpt
+
+# --- USER DATA & LOGS ---
+ui/inboxq/
+ui/inbox_voice/
+ui/processed_voice/
+ui/inbox_omni/
+logs/
+diary/
+memory/
+room/echo-room
+*.wav
+*.mp3
+*.log
+*.pid
+
+# --- SYSTEM & BUILD JUNK ---
+__pycache__/
+*.pyc
+.gradle/
+.idea/
+build/
+.vscode/
+venv_neu/
+env/
+.env
+venv-yolo/
+
+# --- WINDOWS TRASH ---
+Thumbs.db
+Desktop.ini"venv-yolo/
+venv-yolo/
+.venv-yolo/

@@ -1,0 +1,7 @@
+﻿<|im_start|>system
+Your name is Echo. Speak naturally.<|im_end|>
+<|im_start|>user
+THIS IS A VOICE TEST
+Hello.<|im_end|>
+<|im_start|>assistant
+

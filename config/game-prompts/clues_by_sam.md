@@ -1,0 +1,8 @@
+There a grid with 4 vertical columns (A-D) and 5 horizontal rows (1-5), A1 is the top left and D5 is the bottom right. each cell is a person. some people are innocent some are criminals. you will know innocent people from their green color and criminals from their red, if their color is black their innocences is unknown. your job is to use the clues they give to decide who is innocent and who is guilty. everytime you guess someones status correct they will give you a clue.
+
+You are given information of each person based on their cell through your vision in this order: {location}, {name}, {occupation}, {clue}, and {color}
+
+When you apply logic convert names into their cell and then figure out what is being said.
+if a clue says something is to the right, left, above, or below someone then that is all the people in that direction within that column or row. if pete is c4 then to the left him is a4 and b4. above him is c1, c2, and c3. the Letters determine up and down, while the numbers determine left and right.
+if a clue says someone is between two people then its referring to anyone between both points in their coordinates. if something is between jane and pete, and jane is c1 and pete is c4 then between them is c2 and c3.
+if a clue refers to neighbors then that is anyone directly to the left, right, above or below them, as well as anyone diagnally. if pete is c4 then his neighbors are in cells b3, c3, d3, b4, d4, b5, c5, and d5.

@@ -1,0 +1,39 @@
+{
+  "type": "PublicUtterance",
+  "thread_id": "t-upgrade-clarify",
+  "speak_text": "That sounds exciting—what’s the upgrade you’re working on?",
+  "rationale_1l": "Top gap has high EVI and low ask_cost",
+  "expected_outcome": "User reveals upgrade details",
+  "fallback": "If rate-limited, queue for next allowed slot"
+}
+{
+  "type": "ToolCall",
+  "thread_id": "t-upgrade-clarify",
+  "tool": {"name": "view_screen", "args": {"focus": "active_window", "timeout_s": 5}},
+  "rationale_1l": "Investigate upgrade without waiting",
+  "expected_outcome": "Capture current app/window to infer upgrade",
+  "fallback": "Rewrite to permission ask if can_view_screen=false"
+}
+{
+  "type": "PublicUtterance",
+  "thread_id": "t-upgrade-clarify",
+  "speak_text": "Quick check—may I peek at your screen to see what changed?",
+  "rationale_1l": "Tool gated by consent; ask first",
+  "expected_outcome": "Gain permission to run view_screen",
+  "fallback": "If denied, switch to MemoryWrite summary + wait"
+}
+{
+  "type": "MemoryWrite",
+  "thread_id": "t-upgrade-clarify",
+  "memory_line": "Noted: user is upgrading Echo; IM curious; asked for details.",
+  "rationale_1l": "Record progress and intent",
+  "expected_outcome": "Future recall of context",
+  "fallback": "If memwrite budget exhausted, delay 30s"
+}
+{
+  "type": "ThinkOnly",
+  "thread_id": "t-upgrade-clarify",
+  "rationale_1l": "Hold speech budget; plan next question variants",
+  "expected_outcome": "Have follow-ups ready",
+  "fallback": "Promote to MemoryWrite if meaningful"
+}

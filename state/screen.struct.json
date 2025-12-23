@@ -1,0 +1,1 @@
+{"timecode": "2025-12-17T09:16:32.069818Z", "imgsz": 512, "conf": 0.35, "summary": "Detected laptop:1", "counts": {"laptop": 1}, "objects": [{"label": "laptop", "bbox": [26.249998092651367, 0.9374999403953552, 1756.8748779296875, 1071.5623779296875], "conf": 0.409, "label_clip": "status effect icon", "clip_sim": 0.234}], "notes": ["yolo-normal-vision"]}

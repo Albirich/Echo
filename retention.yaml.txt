@@ -1,0 +1,5 @@
+screenshots: {max_days: 14, max_gb: 8, capture: {on_events: true, regions_only: true}}
+gallery:     {curate_keep_top_pct: 20}
+cache:       {max_gb: 8}
+vector:      {rebuild_days: 30}
+logs:        {keep_days: 14}

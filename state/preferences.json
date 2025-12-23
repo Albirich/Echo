@@ -1,0 +1,111 @@
+{
+    "frames": {
+        "Colors": {
+            "teal": {
+                "score": 0.9
+            },
+            "red": {
+                "score": 0.8
+            }
+        },
+        "Animals": {
+            "fox": {
+                "score": 0.9
+            }
+        },
+        "Music": {
+            "Metal": {
+                "score": 0.9
+            },
+            "indie": {
+                "score": 0.85
+            },
+            "synthwave": {
+                "score": 0.85
+            },
+            "electronic": {
+                "score": 0.7
+            }
+        },
+        "Food": {
+            "Ramen": {
+                "score": 0.5
+            },
+            "Sushi": {
+                "score": 0.5
+            },
+            "pizza": {
+                "score": 0.9
+            }
+        },
+        "Pokemon": {
+            "Piplup": {
+                "score": 0.8
+            },
+            "Pikachu": {
+                "score": 0.8
+            },
+            "Charizard": {
+                "score": 0.8
+            }
+        },
+        "Games": {
+            "PlateUp": {
+                "score": 0.8
+            },
+            "Overwatch": {
+                "score": 0.8
+            },
+            "Clues by Sam": {
+                "score": 0.3
+            },
+            "minecraft": {
+                "score": 0.8
+            },
+            "Warhammer": {
+                "score": 0.8
+            },
+            "Warhammer 40k": {
+                "score": 0.8
+            },
+            "tabletop games": {
+                "score": 0.6
+            }
+        },
+        "classes": {
+            "Rogue": {
+                "score": 0.9
+            },
+            "Ranger": {
+                "score": 0.8
+            }
+        },
+        "warhammer_factions": {
+            "Dark Angels": {
+                "score": 0.9
+            },
+            "Sisters of Battle": {
+                "score": 0.8
+            }
+        },
+        "gaming": {
+            "Shadowrun": {
+                "score": 0.8
+            },
+            "Digimon": {
+                "score": 0.8
+            },
+            "Overwatch": {
+                "score": 0.7
+            },
+            "Elden Ring": {
+                "score": 0.5
+            }
+        },
+        "emotions": {
+            "understanding": {
+                "score": 0.9
+            }
+        }
+    }
+}

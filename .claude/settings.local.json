@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Select-Object ProcessName,Id)",
+      "Bash(powershell.exe -Command \"Test-Path ''D:\\llama-cpp\\llama-mtmd-cli.exe''\")",
+      "Bash(powershell.exe -Command:*)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File \".\\Start-VisionProbe-Lite.ps1\" -Once)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"$env:ECHO_VISION_LLAMACPP_MODEL = ''D:\\Echo\\models\\Qwen2.5-VL-7B-Abliterated-Caption-it.Q4_K_M.gguf''; $env:ECHO_VISION_MMPROJ = ''D:\\Echo\\models\\Qwen2.5-VL-7B-Abliterated-Caption-it.mmproj-f16.gguf''; .\\Start-VisionProbe-Lite.ps1 -Once\")",
+      "Bash(Select-Object -First 50)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \".\\Start-VisionProbe-Lite.ps1 -Once\")",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"Get-Process powershell,ollama,electron -ErrorAction SilentlyContinue | Select-Object ProcessName,Id,Path | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"Get-Process | Where-Object { $_ProcessName -match ''llama|ollama|electron|node'' } | Select-Object ProcessName,Id,Path | Format-Table -AutoSize\")",
+      "Bash(powershell.exe:*)",
+      "Bash(ls:*)",
+      "Bash(Start-Sleep -Seconds 5)",
+      "Bash(Get-Content 'd:\\Echo\\logs\\im.events.jsonl')",
+      "Bash(Select-Object -Last 10)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

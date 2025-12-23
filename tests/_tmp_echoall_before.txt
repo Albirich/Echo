@@ -1,0 +1,73 @@
+﻿<#
+  Start-EchoAll.ps1 â€” minimal launcher
+  Starts only these four components:
+    - Start-Echo.ps1
+    - Start-IM.ps1
+    - Start-EchoRoom.ps1
+    - Start-VisionProbe-Lite.ps1
+  No Ollama/llama.cpp orchestration, warmups, or extras.
+#>
+
+$ErrorActionPreference = 'Stop'
+
+# Resolve home and logs
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $env:ECHO_HOME -or -not (Test-Path $env:ECHO_HOME)) { $env:ECHO_HOME = $ScriptRoot }
+$HOME_DIR = $env:ECHO_HOME
+Set-Location $HOME_DIR
+
+$logs = Join-Path $HOME_DIR 'logs'
+$uiPath = Join-Path $HOME_DIR 'ui'
+$inboxq = Join-Path $uiPath 'inboxq'
+$outbox = Join-Path $uiPath 'outbox.jsonl'
+New-Item -ItemType Directory -Force -Path $logs,$uiPath,$inboxq | Out-Null
+if (-not (Test-Path -LiteralPath $outbox)) { [IO.File]::WriteAllText($outbox,'',[Text.UTF8Encoding]::new($false)) }
+
+# Simple child launcher (hidden, redirects to logs)
+function Start-Child {
+  param(
+    [Parameter(Mandatory=$true)][string]$Name,
+    [Parameter(Mandatory=$true)][string]$File,
+    [Parameter(Mandatory=$true)][string]$WorkingDirectory,
+    [string[]]$Args = @()
+  )
+  $ts = (Get-Date -Format 'yyyyMMdd_HHmmss')
+  $out = Join-Path $logs ("{0}-{1}.out.log" -f $Name, $ts)
+  $err = Join-Path $logs ("{0}-{1}.err.log" -f $Name, $ts)
+  $psi = @{
+    FilePath               = 'powershell'
+    ArgumentList           = @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File', $File) + $Args
+    WorkingDirectory       = $WorkingDirectory
+    RedirectStandardOutput = $out
+    RedirectStandardError  = $err
+    WindowStyle            = 'Hidden'
+    PassThru               = $true
+  }
+  $p = Start-Process @psi
+  Write-Host ("[EchoAll] Started {0} (PID {1})" -f $Name, $p.Id)
+  Write-Host ("[EchoAll]   -> STDOUT: {0}" -f $out)
+  Write-Host ("[EchoAll]   -> STDERR: {0}" -f $err)
+  return [pscustomobject]@{ Name=$Name; Process=$p; Out=$out; Err=$err }
+}
+
+Write-Host "[EchoAll] Launching minimal Echo stack..."
+
+# Launch exactly the requested four components
+$chat   = Start-Child -Name 'start-echo'               -File (Join-Path $HOME_DIR 'Start-Echo.ps1')            -WorkingDirectory $HOME_DIR
+$im     = Start-Child -Name 'start-im'                 -File (Join-Path $HOME_DIR 'Start-IM.ps1')              -WorkingDirectory $HOME_DIR
+$room   = Start-Child -Name 'start-echoroom'           -File (Join-Path $HOME_DIR 'Start-EchoRoom.ps1')        -WorkingDirectory $HOME_DIR
+$vision = Start-Child -Name 'start-visionprobe-burst'  -File (Join-Path $HOME_DIR 'Start-VisionProbe-Burst.ps1')-WorkingDirectory $HOME_DIR
+
+Write-Host ""
+Write-Host "[EchoAll] ==============================================="
+Write-Host "[EchoAll]   Echo minimal stack launched."
+if ($chat)   { Write-Host ("[EchoAll]   Chat     PID: {0}" -f $chat.Process.Id) }
+if ($im)     { Write-Host ("[EchoAll]   IM       PID: {0}" -f $im.Process.Id) }
+if ($room)   { Write-Host ("[EchoAll]   EchoRoom PID: {0}" -f $room.Process.Id) }
+if ($vision) { Write-Host ("[EchoAll]   Vision   PID: {0}" -f $vision.Process.Id) }
+Write-Host ("[EchoAll]   Logs: {0} (per-process .out/.err files)" -f $logs)
+Write-Host "[EchoAll] ==============================================="
+Write-Host ""
+
+# Exit after launching; children continue independently
+

@@ -1,0 +1,28 @@
+﻿{
+    "background":  "file:///D:/Echo/decor/wallpaper.jpg",
+    "theme":  "dark",
+    "alwaysOnTop":  false,
+    "clickThrough":  false,
+    "width":  1550,
+    "height":  1070,
+    "widgets":  [
+
+                ],
+    "stand":  {
+                  "visible":  true,
+                  "current":  "file:///D:/Echo/stand/classic_dress/confused.png?t=1766282254549",
+                  "x":  480,
+                  "y":  280,
+                  "scale":  118,
+                  "mirror":  false
+              },
+    "gamePromptFile":  "",
+    "stickies":  [
+
+                 ],
+    "notes":  [
+
+              ],
+    "version":  1,
+    "visionPromptFile":  ""
+}
